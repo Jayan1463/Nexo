@@ -1,0 +1,9 @@
+node_modules
+release
+dist
+.git
+.gitignore
+.env
+.env.*
+*.log
+.DS_Store
