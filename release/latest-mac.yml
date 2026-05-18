@@ -1,8 +1,0 @@
-version: 0.0.0
-files:
-  - url: Nexo-Cloud-0.0.0-arm64.dmg
-    sha512: CRxA7lNxmLPNhNrZU8x8tIMDacUvHjmoKPuB2Rziv4HS4piEXkLL9sI48LqMzVdk57cKwyYodcZbYXHuQu44rg==
-    size: 181938222
-path: Nexo-Cloud-0.0.0-arm64.dmg
-sha512: CRxA7lNxmLPNhNrZU8x8tIMDacUvHjmoKPuB2Rziv4HS4piEXkLL9sI48LqMzVdk57cKwyYodcZbYXHuQu44rg==
-releaseDate: '2026-03-21T11:43:33.737Z'

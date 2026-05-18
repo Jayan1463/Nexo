@@ -82,9 +82,24 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/organizations/$(userOrgId())/projects/$(projectId));
     }
 
-    function isServerInUserOrg(serverId) {
+    function isProjectInOrg(projectId, orgId) {
       return isAuthenticated() &&
-        isProjectInUserOrg(get(/databases/$(database)/documents/servers/$(serverId)).data.projectId);
+        exists(/databases/$(database)/documents/organizations/$(orgId)/projects/$(projectId));
+    }
+
+    function canAccessOrg(orgId) {
+      return isAuthenticated() && (
+        isAdmin() ||
+        isOrgMember(orgId) ||
+        isOrgOwner(orgId) ||
+        userOrgId() == orgId
+      );
+    }
+
+    function isServerInOrg(projectId, orgId) {
+      return isAuthenticated() &&
+        canAccessOrg(orgId) &&
+        isProjectInOrg(projectId, orgId);
     }
 
     function isAdmin() {
@@ -109,8 +124,9 @@ service cloud.firestore {
     }
 
     function isValidServer(data) {
-      return data.keys().hasAll(['id', 'projectId', 'name', 'apiKey']) &&
+      return data.keys().hasAll(['id', 'orgId', 'projectId', 'name', 'apiKey']) &&
              data.id is string &&
+             data.orgId is string &&
              data.projectId is string &&
              data.name is string &&
              data.name.size() > 0 && data.name.size() < 100 &&
@@ -196,15 +212,23 @@ service cloud.firestore {
     }
 
     match /servers/{serverId} {
-      allow read: if isServerInUserOrg(serverId);
-      allow create: if isAuthenticated() && isValidServer(request.resource.data) && isProjectInUserOrg(request.resource.data.projectId);
-      allow update: if isServerInUserOrg(serverId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'tags', 'status', 'lastSeen']));
-      allow delete: if isServerInUserOrg(serverId);
+      allow read: if isServerInOrg(resource.data.projectId, resource.data.orgId);
+      allow create: if isAuthenticated() &&
+        isValidServer(request.resource.data) &&
+        isServerInOrg(request.resource.data.projectId, request.resource.data.orgId);
+      allow update: if isServerInOrg(resource.data.projectId, resource.data.orgId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'tags', 'status', 'lastSeen']));
+      allow delete: if isServerInOrg(resource.data.projectId, resource.data.orgId);
     }
 
     match /servers/{serverId}/metrics/{metricId} {
-      allow read: if isServerInUserOrg(serverId);
-      allow create: if isServerInUserOrg(serverId) && isValidMetric(request.resource.data);
+      allow read: if isServerInOrg(
+        get(/databases/$(database)/documents/servers/$(serverId)).data.projectId,
+        get(/databases/$(database)/documents/servers/$(serverId)).data.orgId
+      );
+      allow create: if isServerInOrg(
+        get(/databases/$(database)/documents/servers/$(serverId)).data.projectId,
+        get(/databases/$(database)/documents/servers/$(serverId)).data.orgId
+      ) && isValidMetric(request.resource.data);
     }
 
     match /joinRequests/{requestId} {
