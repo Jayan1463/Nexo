@@ -52,7 +52,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [userRole, setUserRole] = useState<AppRole>('viewer');
   const [loading, setLoading] = useState(true);
-  const [needsOrgSetup, setNeedsOrgSetup] = useState(false);
   const inviteHandledRef = useRef(false);
 
   useEffect(() => {
@@ -85,16 +84,42 @@ export default function App() {
         let orgId = '';
         
         if (!userSnap.exists()) {
-          await setDoc(userRef, {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email,
-            displayName: firebaseUser.displayName,
-            photoURL: firebaseUser.photoURL,
-            role: 'viewer',
-            orgIds: [],
-            createdAt: serverTimestamp(),
-          }, { merge: true });
-          setNeedsOrgSetup(true);
+          // Create default organization for new user
+          const orgRef = doc(collection(db, 'organizations'));
+          orgId = orgRef.id;
+          
+          try {
+            const inviteCode = await generateUniqueInviteCode();
+            await setDoc(orgRef, {
+              id: orgId,
+              name: `${firebaseUser.displayName || 'My'}'s Organization`,
+              ownerId: firebaseUser.uid,
+              inviteCode,
+              plan: 'free',
+              createdAt: serverTimestamp(),
+            });
+
+            // Create member document
+            const memberRef = doc(db, `organizations/${orgId}/members`, firebaseUser.uid);
+            await setDoc(memberRef, {
+              uid: firebaseUser.uid,
+              role: 'owner',
+              joinedAt: serverTimestamp(),
+            });
+
+            await setDoc(userRef, {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              displayName: firebaseUser.displayName,
+              photoURL: firebaseUser.photoURL,
+              role: 'owner',
+              currentOrgId: orgId,
+              orgIds: [orgId],
+              createdAt: serverTimestamp(),
+            });
+          } catch (error) {
+            handleFirestoreError(error, OperationType.WRITE, 'organizations/users/members');
+          }
         } else {
           const userData = userSnap.data() as any;
           const userOrgIds = Array.isArray(userData?.orgIds)
@@ -183,12 +208,7 @@ export default function App() {
         }
         
         setUser(firebaseUser);
-        setOrg(orgId || null);
-        setNeedsOrgSetup(!orgId);
-        if (!orgId) {
-          setProject(null);
-          return;
-        }
+        setOrg(orgId);
         try {
           const orgRef = doc(db, 'organizations', orgId);
           const orgSnap = await getDoc(orgRef);
@@ -352,9 +372,6 @@ export default function App() {
   if (!user) {
     return <LoginPage />;
   }
-  if (needsOrgSetup) {
-    return <OrganizationSetupPage onComplete={() => setNeedsOrgSetup(false)} />;
-  }
 
   return (
     <div className="h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 overflow-hidden font-sans transition-colors duration-300">
@@ -391,38 +408,6 @@ export default function App() {
     </div>
   );
 }
-
-const OrganizationSetupPage = ({ onComplete }: { onComplete: () => void }) => {
-  const { user, setOrg, setProject } = useAppStore();
-  const [orgName, setOrgName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-
-  const createOrg = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user?.uid || !orgName.trim()) return;
-    setSubmitting(true);
-    setError('');
-    try {
-      const orgRef = doc(collection(db, 'organizations'));
-      const orgId = orgRef.id;
-      await setDoc(orgRef, { id: orgId, name: orgName.trim(), ownerId: user.uid, plan: 'free', createdAt: serverTimestamp() });
-      await setDoc(doc(db, `organizations/${orgId}/members`, user.uid), { uid: user.uid, role: 'owner', joinedAt: serverTimestamp() });
-      await setDoc(doc(db, 'users', user.uid), { currentOrgId: orgId, orgIds: [orgId], role: 'owner' }, { merge: true });
-      const projectRef = doc(collection(db, `organizations/${orgId}/projects`));
-      await setDoc(projectRef, { id: projectRef.id, orgId, name: 'Default Project', environment: 'prod', createdAt: serverTimestamp() });
-      setOrg(orgId);
-      setProject(projectRef.id);
-      onComplete();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create organization');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return <div className="min-h-screen flex items-center justify-center p-6 bg-zinc-50"><form onSubmit={createOrg} className="w-full max-w-lg bg-white p-8 rounded-2xl border border-zinc-200 space-y-4"><h2 className="text-2xl font-bold">Create your organization</h2><input value={orgName} onChange={(e)=>setOrgName(e.target.value)} placeholder="Organization name" className="w-full border border-zinc-300 rounded-xl px-4 py-3"/>{error && <p className="text-sm text-red-600">{error}</p>}<button disabled={submitting || !orgName.trim()} className="w-full bg-zinc-900 text-white rounded-xl py-3">{submitting ? 'Creating...' : 'Create organization'}</button></form></div>;
-};
 
 const LoginPage = () => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');

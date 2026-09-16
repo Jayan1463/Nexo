@@ -73,7 +73,6 @@ export interface Invite {
 
 export interface Server {
   id: string;
-  orgId?: string;
   projectId: string;
   name: string;
   apiKey: string;

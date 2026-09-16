@@ -30,22 +30,18 @@ import {
   onSnapshot, 
   doc, 
   setDoc, 
-  getDoc,
-  getDocs,
   deleteDoc,
   serverTimestamp,
   handleFirestoreError,
   OperationType
 } from '../firebase';
 import { useAppStore } from '../store';
-import { Server, ServerMetric } from '../types';
+import { Server, ServerMetric, Project } from '../types';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { hasRole } from '../lib/rbac';
 
 export const Servers = () => {
-  const { currentOrgId, currentProjectId, user } = useAppStore();
-  const [currentRole, setCurrentRole] = useState<'owner' | 'admin' | 'developer' | 'viewer'>('viewer');
+  const { currentOrgId, currentProjectId, setProject } = useAppStore();
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -56,68 +52,109 @@ export const Servers = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [provisionError, setProvisionError] = useState<string | null>(null);
-  const [provisionSuccess, setProvisionSuccess] = useState<string | null>(null);
-  const [isProvisioning, setIsProvisioning] = useState(false);
-  const [listError, setListError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!currentOrgId || !user?.uid) return;
-    const memberRef = doc(db, `organizations/${currentOrgId}/members`, user.uid);
-    const unsub = onSnapshot(memberRef, (snap) => {
-      const role = (snap.exists() ? String(snap.data().role || 'viewer') : 'viewer') as any;
-      setCurrentRole(role);
-    });
-    return () => unsub();
-  }, [currentOrgId, user?.uid]);
+  const [projectIds, setProjectIds] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!currentProjectId) {
+    if (!currentOrgId) {
+      setProjectIds([]);
+      return;
+    }
+
+    const projectsRef = collection(db, `organizations/${currentOrgId}/projects`);
+    const unsubscribe = onSnapshot(projectsRef, (snapshot) => {
+      const ids = snapshot.docs.map((projectDoc) => {
+        const data = projectDoc.data() as Partial<Project>;
+        return data.id || projectDoc.id;
+      });
+      setProjectIds(ids);
+
+      if (ids.length > 0 && (!currentProjectId || !ids.includes(currentProjectId))) {
+        setProject(ids[0]);
+      }
+    }, (error) => {
+      setProjectIds([]);
+      console.error(`Failed to load projects for org ${currentOrgId}:`, error);
+    });
+
+    return () => unsubscribe();
+  }, [currentOrgId, currentProjectId, setProject]);
+
+  useEffect(() => {
+    if (!currentOrgId && !currentProjectId) {
       setServers([]);
       setLoading(false);
-      setListError('No active project selected.');
+      return;
+    }
+
+    const scopedProjectIds = Array.from(
+      new Set(
+        projectIds.filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    );
+    const fallbackProjectId = currentProjectId && currentProjectId.length > 0 ? currentProjectId : null;
+    const effectiveProjectIds = scopedProjectIds.length > 0
+      ? scopedProjectIds
+      : (fallbackProjectId ? [fallbackProjectId] : []);
+
+    if (effectiveProjectIds.length === 0) {
+      setLoading(false);
       return;
     }
 
     setLoading(true);
-    setListError(null);
-    const q = query(collection(db, 'servers'), where('projectId', '==', currentProjectId));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const serverList = snapshot.docs.map((serverDoc) => ({
-          id: serverDoc.id,
-          ...serverDoc.data(),
-        } as Server));
-        setServers(serverList);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Servers stream failed for current project:', currentProjectId, error);
-        setListError('Unable to load servers for the active project. Check Firestore rules/permissions.');
-        setLoading(false);
-      },
-    );
+    const unsubscribers: Array<() => void> = [];
+    const chunkServerMaps = new Map<string, Map<string, Server>>();
+    const initializedChunks = new Set<string>();
+    const totalChunks = Math.ceil(effectiveProjectIds.length / 10);
 
-    return () => unsubscribe();
-  }, [currentProjectId]);
+    for (let i = 0; i < effectiveProjectIds.length; i += 10) {
+      const chunk = effectiveProjectIds.slice(i, i + 10);
+      const chunkKey = chunk.join('|');
+      const chunkQuery = query(collection(db, 'servers'), where('projectId', 'in', chunk));
+      const unsubscribe = onSnapshot(chunkQuery, (snapshot) => {
+        const currentChunkMap = new Map<string, Server>();
+        snapshot.docs.forEach((serverDoc) => {
+          currentChunkMap.set(serverDoc.id, { id: serverDoc.id, ...serverDoc.data() } as Server);
+        });
+        chunkServerMaps.set(chunkKey, currentChunkMap);
+
+        initializedChunks.add(chunkKey);
+        const merged = new Map<string, Server>();
+        chunkServerMaps.forEach((serverMap) => {
+          serverMap.forEach((server, id) => merged.set(id, server));
+        });
+        setServers(Array.from(merged.values()));
+        if (initializedChunks.size >= totalChunks) {
+          setLoading(false);
+        }
+      }, (error) => {
+        console.error('Servers stream failed for project chunk:', chunk, error);
+        initializedChunks.add(chunkKey);
+        if (initializedChunks.size >= totalChunks) {
+          setLoading(false);
+        }
+      }
+      );
+      unsubscribers.push(unsubscribe);
+    }
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [currentOrgId, currentProjectId, projectIds]);
 
   const handleAddServer = async (e: React.FormEvent) => {
     e.preventDefault();
     setProvisionError(null);
-    setProvisionSuccess(null);
-    if (!currentProjectId) {
+    const effectiveProjectId = currentProjectId && projectIds.includes(currentProjectId)
+      ? currentProjectId
+      : (projectIds[0] || null);
+    if (!effectiveProjectId) {
       setProvisionError('No active project selected. Choose a project in the top bar and try again.');
-      return;
-    }
-    if (!currentOrgId) {
-      setProvisionError('No active organization selected. Choose an organization in the top bar and try again.');
       return;
     }
     if (!newServerName.trim()) {
       setProvisionError('Node identifier is required.');
-      return;
-    }
-    if (!hasRole(currentRole, 'developer')) {
-      setProvisionError('You do not have permission to provision servers.');
       return;
     }
 
@@ -132,11 +169,9 @@ export const Servers = () => {
     }, {} as Record<string, string>);
 
     const serverRef = doc(db, 'servers', serverId);
-    const targetProjectId = currentProjectId;
     const newServer: Server = {
       id: serverId,
-      orgId: currentOrgId,
-      projectId: targetProjectId,
+      projectId: effectiveProjectId,
       name: newServerName,
       apiKey: apiKey,
       status: 'offline',
@@ -145,35 +180,13 @@ export const Servers = () => {
     };
 
     try {
-      setIsProvisioning(true);
       await setDoc(serverRef, newServer);
-      const createdServer = await getDoc(serverRef);
-      if (!createdServer.exists()) {
-        throw new Error('Provisioning verification failed: server record not found after write.');
-      }
-
-      const visibilitySnapshot = await getDocs(
-        query(collection(db, 'servers'), where('projectId', '==', targetProjectId)),
-      );
-      const isVisibleInProjectQuery = visibilitySnapshot.docs.some((serverDoc) => serverDoc.id === serverId);
-
       setGeneratedConfig({ id: serverId, apiKey });
       setNewServerName('');
       setTags([{ key: '', value: '' }]);
-      if (isVisibleInProjectQuery) {
-        setProvisionSuccess(`Node added successfully to project ${targetProjectId}.`);
-      } else {
-        setProvisionError(`Node was created in project ${targetProjectId}, but the list query cannot read it yet. Check Firestore read rules for /servers.`);
-      }
     } catch (error) {
       setProvisionError('Failed to provision node. Verify project access and try again.');
-      try {
-        handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}`);
-      } catch (loggingError) {
-        console.error('Provisioning failed with Firestore error details:', loggingError);
-      }
-    } finally {
-      setIsProvisioning(false);
+      handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}`);
     }
   };
 
@@ -186,10 +199,6 @@ export const Servers = () => {
   };
 
   const handleDeleteServer = async (serverId: string) => {
-    if (!hasRole(currentRole, 'admin')) {
-      setProvisionError('Only admin/owner can delete servers.');
-      return;
-    }
     await deleteDoc(doc(db, 'servers', serverId));
   };
 
@@ -214,18 +223,12 @@ export const Servers = () => {
         </div>
         <button 
           onClick={() => setShowAddModal(true)}
-          disabled={!hasRole(currentRole, 'developer')}
           className="bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 px-8 py-4 rounded-2xl text-sm font-black hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-zinc-900/10 dark:shadow-white/5 flex items-center gap-3"
         >
           <Plus className="w-5 h-5" />
           Provision Node
         </button>
       </div>
-      {listError && (
-        <div className="text-amber-700 dark:text-amber-300 text-xs font-bold tracking-wide uppercase bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
-          {listError}
-        </div>
-      )}
 
       {loading ? (
         <div className="flex flex-col items-center justify-center h-96 space-y-4">
@@ -273,8 +276,6 @@ export const Servers = () => {
               onClick={() => {
                 setShowAddModal(false);
                 setGeneratedConfig(null);
-                setProvisionError(null);
-                setProvisionSuccess(null);
               }}
               className="absolute inset-0 bg-zinc-950/60 backdrop-blur-md"
             />
@@ -372,17 +373,12 @@ export const Servers = () => {
                         {provisionError}
                       </div>
                     )}
-                    {provisionSuccess && (
-                      <div className="text-emerald-500 text-xs font-bold tracking-wide uppercase bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
-                        {provisionSuccess}
-                      </div>
-                    )}
                     <button 
                       type="submit"
-                      disabled={!newServerName || isProvisioning}
+                      disabled={!newServerName}
                       className="w-full bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 py-5 rounded-2xl font-black hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-zinc-900/10 dark:shadow-white/5 disabled:opacity-50 disabled:scale-100"
                     >
-                      {isProvisioning ? 'Provisioning...' : 'Generate Provisioning Key'}
+                      Generate Provisioning Key
                     </button>
                   </form>
                 </div>
