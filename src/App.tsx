@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { 
   auth, 
   onAuthStateChanged, 
@@ -29,22 +29,21 @@ import { Organization, Project } from './types';
 import { cn } from './lib/utils';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
-import { Dashboard } from './pages/Dashboard';
-import { Topology3D } from './components/Topology3D';
-import { Servers } from './pages/Servers';
-import { Analytics } from './pages/Analytics';
-import { Logs } from './pages/Logs';
-import { Alerts } from './pages/Alerts';
-import { Cost } from './pages/Cost';
-import { Settings } from './pages/Settings';
-import { Incidents } from './pages/Incidents';
-import { RiskAnalysis } from './pages/RiskAnalysis';
-import { StatusPage } from './pages/StatusPage';
-import { HelpDocs } from './pages/HelpDocs';
-import { Team } from './pages/Team';
-import { ApiKeys } from './pages/ApiKeys';
-import { AuditLogs } from './pages/AuditLogs';
-import { Reports } from './pages/Reports';
+const Dashboard = lazy(() => import('./pages/Dashboard').then(({ Dashboard }) => ({ default: Dashboard })));
+const Servers = lazy(() => import('./pages/Servers').then(({ Servers }) => ({ default: Servers })));
+const Analytics = lazy(() => import('./pages/Analytics').then(({ Analytics }) => ({ default: Analytics })));
+const Logs = lazy(() => import('./pages/Logs').then(({ Logs }) => ({ default: Logs })));
+const Alerts = lazy(() => import('./pages/Alerts').then(({ Alerts }) => ({ default: Alerts })));
+const Cost = lazy(() => import('./pages/Cost').then(({ Cost }) => ({ default: Cost })));
+const Settings = lazy(() => import('./pages/Settings').then(({ Settings }) => ({ default: Settings })));
+const Incidents = lazy(() => import('./pages/Incidents').then(({ Incidents }) => ({ default: Incidents })));
+const RiskAnalysis = lazy(() => import('./pages/RiskAnalysis').then(({ RiskAnalysis }) => ({ default: RiskAnalysis })));
+const StatusPage = lazy(() => import('./pages/StatusPage').then(({ StatusPage }) => ({ default: StatusPage })));
+const HelpDocs = lazy(() => import('./pages/HelpDocs').then(({ HelpDocs }) => ({ default: HelpDocs })));
+const Team = lazy(() => import('./pages/Team').then(({ Team }) => ({ default: Team })));
+const ApiKeys = lazy(() => import('./pages/ApiKeys').then(({ ApiKeys }) => ({ default: ApiKeys })));
+const AuditLogs = lazy(() => import('./pages/AuditLogs').then(({ AuditLogs }) => ({ default: AuditLogs })));
+const Reports = lazy(() => import('./pages/Reports').then(({ Reports }) => ({ default: Reports })));
 import { 
   Zap, 
   ArrowRight,
@@ -153,6 +152,9 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
       if (firebaseUser) {
+        setUser(firebaseUser);
+        setLoading(false);
+
         // Sync user to Firestore
         const userRef = doc(db, 'users', firebaseUser.uid);
         const userSnap = await getDoc(userRef);
@@ -282,7 +284,6 @@ export default function App() {
           }
         }
         
-        setUser(firebaseUser);
         setOrg(orgId);
         try {
           const orgRef = doc(db, 'organizations', orgId);
@@ -487,21 +488,23 @@ export default function App() {
             transition={{ duration: 0.3, ease: "easeOut" }}
           >
             <RouteErrorBoundary routeKey={activeTab}>
-              {activeTab === 'dashboard' && <Dashboard />}
-              {activeTab === 'servers' && <Servers />}
-              {activeTab === 'analytics' && <Analytics />}
-              {activeTab === 'logs' && <Logs />}
-              {activeTab === 'alerts' && <Alerts />}
-              {activeTab === 'incidents' && <Incidents />}
-              {activeTab === 'cost' && <Cost />}
-              {activeTab === 'risk' && <RiskAnalysis />}
-              {activeTab === 'status' && <StatusPage />}
-              {activeTab === 'team' && <Team />}
-              {activeTab === 'apiKeys' && <ApiKeys />}
-              {activeTab === 'audit' && <AuditLogs />}
-              {activeTab === 'reports' && <Reports />}
-              {activeTab === 'help' && <HelpDocs />}
-              {activeTab === 'settings' && <Settings />}
+              <Suspense fallback={<div className="p-8 text-sm text-zinc-500">Loading module...</div>}>
+                {activeTab === 'dashboard' && <Dashboard />}
+                {activeTab === 'servers' && <Servers />}
+                {activeTab === 'analytics' && <Analytics />}
+                {activeTab === 'logs' && <Logs />}
+                {activeTab === 'alerts' && <Alerts />}
+                {activeTab === 'incidents' && <Incidents />}
+                {activeTab === 'cost' && <Cost />}
+                {activeTab === 'risk' && <RiskAnalysis />}
+                {activeTab === 'status' && <StatusPage />}
+                {activeTab === 'team' && <Team />}
+                {activeTab === 'apiKeys' && <ApiKeys />}
+                {activeTab === 'audit' && <AuditLogs />}
+                {activeTab === 'reports' && <Reports />}
+                {activeTab === 'help' && <HelpDocs />}
+                {activeTab === 'settings' && <Settings />}
+              </Suspense>
             </RouteErrorBoundary>
           </motion.div>
         </AnimatePresence>
