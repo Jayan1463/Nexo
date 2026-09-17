@@ -12,7 +12,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { collection, query, onSnapshot, db, handleFirestoreError, OperationType, orderBy, limit, doc, getDoc, setDoc, serverTimestamp } from '../firebase';
+import { collection, query, onSnapshot, db, handleFirestoreError, OperationType, orderBy, limit, doc, getDoc, setDoc, updateDoc, serverTimestamp } from '../firebase';
 import { useAppStore } from '../store';
 import { Alert } from '../types';
 
@@ -25,7 +25,7 @@ type IntegrationChannel = {
 };
 
 export const Alerts = () => {
-  const { currentProjectId } = useAppStore();
+  const { currentProjectId, user } = useAppStore();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [activeFilter, setActiveFilter] = useState('all');
   const [actionMessage, setActionMessage] = useState('');
@@ -192,6 +192,52 @@ export const Alerts = () => {
     }
   };
 
+  const handleAcknowledge = async (alert: Alert) => {
+    if (!currentProjectId || !alert.id) return;
+    await updateDoc(doc(db, `projects/${currentProjectId}/alerts`, alert.id), {
+      status: 'acknowledged',
+      acknowledgedBy: user?.uid || '',
+      acknowledgedAt: serverTimestamp(),
+    });
+    setActionMessage('Alert acknowledged.');
+  };
+
+  const handleResolve = async (alert: Alert) => {
+    if (!currentProjectId || !alert.id) return;
+    await updateDoc(doc(db, `projects/${currentProjectId}/alerts`, alert.id), {
+      status: 'resolved',
+      resolvedBy: user?.uid || '',
+      resolvedAt: serverTimestamp(),
+    });
+    setActionMessage('Alert resolved.');
+  };
+
+  const handleEscalate = async (alert: Alert) => {
+    if (!currentProjectId || !alert.id) return;
+    const incidentRef = doc(collection(db, `projects/${currentProjectId}/incidents`));
+    const now = new Date().toISOString();
+    await setDoc(incidentRef, {
+      id: incidentRef.id,
+      projectId: currentProjectId,
+      serverId: alert.serverId || '',
+      title: alert.message,
+      summary: `Escalated from alert ${alert.id}.`,
+      severity: alert.severity,
+      status: 'investigating',
+      sourceAlertId: alert.id,
+      publicVisible: alert.severity === 'critical',
+      timeline: [{
+        status: 'investigating',
+        message: 'Incident opened from alert.',
+        userId: user?.uid || '',
+        timestamp: now,
+      }],
+      createdAt: now,
+      updatedAt: now,
+    });
+    setActionMessage('Alert escalated into an incident.');
+  };
+
   return (
     <div className="p-8 space-y-8 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
@@ -259,7 +305,13 @@ export const Alerts = () => {
           <div className="space-y-3">
             {filteredAlerts.length > 0 ? (
               filteredAlerts.map((alert) => (
-                <AlertCard key={alert.id} {...alert} />
+                <AlertCard
+                  key={alert.id}
+                  alert={alert}
+                  onAcknowledge={() => handleAcknowledge(alert)}
+                  onResolve={() => handleResolve(alert)}
+                  onEscalate={() => handleEscalate(alert)}
+                />
               ))
             ) : (
               <div className="py-20 text-center border border-dashed border-zinc-200 dark:border-white/5 rounded-2xl">
@@ -318,7 +370,20 @@ const FilterTab = ({ label, count, active, onClick }: any) => (
   </button>
 );
 
-const AlertCard = ({ severity, message, timestamp, status }: Alert) => (
+const AlertCard = ({
+  alert,
+  onAcknowledge,
+  onResolve,
+  onEscalate,
+}: {
+  alert: Alert;
+  onAcknowledge: () => void;
+  onResolve: () => void;
+  onEscalate: () => void;
+}) => {
+  const { severity, message, timestamp, status } = alert;
+  const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp);
+  return (
   <div className="bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-white/5 rounded-xl p-5 hover:border-zinc-300 dark:hover:border-white/10 transition-all group cursor-pointer shadow-sm dark:shadow-none">
     <div className="flex items-start gap-4">
       <div className={cn(
@@ -339,16 +404,39 @@ const AlertCard = ({ severity, message, timestamp, status }: Alert) => (
               {status}
             </span>
           </div>
-          <span className="text-xs text-zinc-500">{new Date(timestamp).toLocaleString()}</span>
+          <span className="text-xs text-zinc-500">{Number.isNaN(date.getTime()) ? 'Live' : date.toLocaleString()}</span>
         </div>
         <p className="text-sm text-zinc-700 dark:text-zinc-200 font-medium">{message}</p>
+        <div className="flex flex-wrap gap-2 mt-4">
+          <button
+            onClick={onAcknowledge}
+            disabled={status !== 'active'}
+            className="px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-white/10 text-[11px] font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-white disabled:opacity-40"
+          >
+            Acknowledge
+          </button>
+          <button
+            onClick={onResolve}
+            disabled={status === 'resolved'}
+            className="px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-white/10 text-[11px] font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-white disabled:opacity-40"
+          >
+            Resolve
+          </button>
+          <button
+            onClick={onEscalate}
+            className="px-3 py-1.5 rounded-lg bg-emerald-500 text-zinc-950 text-[11px] font-black"
+          >
+            Escalate
+          </button>
+        </div>
       </div>
       <div className="p-2 text-zinc-500 opacity-0 group-hover:opacity-100">
         <ArrowRight className="w-4 h-4" />
       </div>
     </div>
   </div>
-);
+  );
+};
 
 const SeverityStat = ({ label, count, color }: any) => (
   <div className="flex items-center justify-between">

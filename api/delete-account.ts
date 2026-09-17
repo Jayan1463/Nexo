@@ -1,9 +1,8 @@
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0298517899";
-const FIREBASE_DATABASE_ID =
-  process.env.FIREBASE_DATABASE_ID || "ai-studio-a6e8cce4-ae5a-499a-9a1c-ced13c60c908";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nexocloud-software";
+const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || "(default)";
 
 function parseServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;

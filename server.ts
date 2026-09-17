@@ -69,6 +69,30 @@ function makeInviteCode() {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
+function hashApiKey(apiKey: string) {
+  return crypto.createHash("sha256").update(apiKey).digest("hex");
+}
+
+async function findServerByApiKey(db: FirebaseFirestore.Firestore, apiKey: string) {
+  const apiKeyHash = hashApiKey(apiKey);
+  const hashedMatch = await db.collection("servers")
+    .where("apiKeyHash", "==", apiKeyHash)
+    .where("apiKeyStatus", "==", "active")
+    .limit(1)
+    .get();
+  if (!hashedMatch.empty) return hashedMatch.docs[0];
+
+  const legacyMatch = await db.collection("servers").where("apiKey", "==", apiKey).limit(1).get();
+  const legacyDoc = legacyMatch.docs[0];
+  if (!legacyDoc || legacyDoc.data().apiKeyStatus === "revoked") return null;
+  return legacyDoc;
+}
+
+function normalizeNumber(value: unknown, fallback = 0) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
 async function ensureUniqueInviteCode(db: FirebaseFirestore.Firestore): Promise<string> {
   for (let i = 0; i < 8; i += 1) {
     const inviteCode = makeInviteCode();
@@ -527,17 +551,19 @@ async function startServer() {
   });
 
   // Real Server Metrics Ingestion Endpoint
-  app.post("/api/metrics", async (req, res) => {
+  app.post(["/api/metrics", "/api/v1/telemetry", "/api/v1/events"], async (req, res) => {
+    const headerKey = typeof req.headers["x-nexo-api-key"] === "string" ? req.headers["x-nexo-api-key"] : "";
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!headerKey && (!authHeader || !authHeader.startsWith("Bearer "))) {
       return res.status(401).json({ error: "Unauthorized: Missing or invalid API key" });
     }
 
-    const apiKey = authHeader.split(" ")[1];
-    const { cpu, memory, network, timestamp } = req.body;
+    const apiKey = headerKey || String(authHeader?.split(" ")[1] || "");
+    const { cpu, memory, network, disk, uptime, timestamp, processes, ports, services } = req.body;
     const cpuValue = Number(cpu);
     const memoryValue = Number(memory);
     const networkValue = Number(network);
+    const diskValue = normalizeNumber(disk, 0);
     if (!Number.isFinite(cpuValue) || cpuValue < 0 || cpuValue > 100) {
       return res.status(400).json({ error: "cpu must be a number between 0 and 100" });
     }
@@ -547,26 +573,27 @@ async function startServer() {
     if (!Number.isFinite(networkValue) || networkValue < 0) {
       return res.status(400).json({ error: "network must be a non-negative number" });
     }
+    if (!Number.isFinite(diskValue) || diskValue < 0 || diskValue > 100) {
+      return res.status(400).json({ error: "disk must be a number between 0 and 100 when provided" });
+    }
 
     try {
       // 1. Validate API Key and find server
-      const serversRef = db.collection("servers");
-      const q = serversRef.where("apiKey", "==", apiKey).limit(1);
-      const snapshot = await q.get();
-
-      if (snapshot.empty) {
+      const serverDoc = await findServerByApiKey(db, apiKey);
+      if (!serverDoc) {
         return res.status(401).json({ error: "Unauthorized: Invalid API key" });
       }
 
-      const serverDoc = snapshot.docs[0];
       const serverData = serverDoc.data();
       const serverId = serverDoc.id;
       const projectId = serverData.projectId;
+      const nextStatus = cpuValue >= 90 || memoryValue >= 90 || diskValue >= 90 ? "degraded" : "online";
 
       // 2. Update server status and lastSeen
       await serverDoc.ref.update({
         lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-        status: "online"
+        status: nextStatus,
+        apiKeyLastUsed: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       // 3. Store metric
@@ -578,13 +605,18 @@ async function startServer() {
         cpu: cpuValue,
         memory: memoryValue,
         network: networkValue,
+        disk: diskValue,
+        uptime: normalizeNumber(uptime, 0),
+        processes: Array.isArray(processes) ? processes.slice(0, 100) : [],
+        ports: Array.isArray(ports) ? ports.slice(0, 100) : [],
+        services: Array.isArray(services) ? services.slice(0, 100) : [],
         timestamp: timestamp || new Date().toISOString()
       };
       await metricRef.set(metricData);
 
       // 4. Anomaly Detection & Alerting
       const rules = await getAlertRules(projectId);
-      const pendingAlerts: Array<{ alertType: "cpu" | "memory"; severity: "warning" | "critical"; message: string }> = [];
+      const pendingAlerts: Array<{ alertType: "cpu" | "memory" | "disk" | "network" | "availability" | "security"; severity: "warning" | "critical"; message: string }> = [];
 
       if (cpuValue >= rules.cpuCritical) {
         pendingAlerts.push({
@@ -611,6 +643,20 @@ async function startServer() {
           alertType: "memory",
           severity: "warning",
           message: `Elevated Memory detected on ${serverData.name}: ${memoryValue.toFixed(1)}%`,
+        });
+      }
+
+      if (diskValue >= 95) {
+        pendingAlerts.push({
+          alertType: "disk",
+          severity: "critical",
+          message: `Disk capacity risk detected on ${serverData.name}: ${diskValue.toFixed(1)}%`,
+        });
+      } else if (diskValue >= 90) {
+        pendingAlerts.push({
+          alertType: "disk",
+          severity: "warning",
+          message: `Disk usage elevated on ${serverData.name}: ${diskValue.toFixed(1)}%`,
         });
       }
 
@@ -644,6 +690,29 @@ async function startServer() {
         };
         await alertRef.set(alertPayload);
 
+        if (candidate.severity === "critical") {
+          const incidentRef = db.collection("projects").doc(projectId).collection("incidents").doc();
+          const nowIso = new Date().toISOString();
+          await incidentRef.set({
+            id: incidentRef.id,
+            projectId,
+            serverId,
+            title: candidate.message,
+            status: "investigating",
+            severity: candidate.severity,
+            summary: "Auto-created from a critical telemetry alert.",
+            sourceAlertId: alertRef.id,
+            publicVisible: Boolean(serverData.publicStatusEnabled),
+            timeline: [{
+              status: "investigating",
+              message: "Incident opened automatically after critical threshold breach.",
+              timestamp: nowIso,
+            }],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        }
+
         if (rules.emailEnabled) {
           await sendAlertEmails(projectId, alertPayload);
         }
@@ -656,13 +725,14 @@ async function startServer() {
   });
 
   // Real Server Logs Ingestion Endpoint
-  app.post("/api/logs", async (req, res) => {
+  app.post(["/api/logs", "/api/v1/logs"], async (req, res) => {
+    const headerKey = typeof req.headers["x-nexo-api-key"] === "string" ? req.headers["x-nexo-api-key"] : "";
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!headerKey && (!authHeader || !authHeader.startsWith("Bearer "))) {
       return res.status(401).json({ error: "Unauthorized: Missing or invalid API key" });
     }
 
-    const apiKey = authHeader.split(" ")[1];
+    const apiKey = headerKey || String(authHeader?.split(" ")[1] || "");
     const { level, message, service, timestamp } = req.body;
     const normalizedLevel = level === "info" || level === "warn" || level === "error" ? level : "info";
     if (typeof message !== "string" || !message.trim()) {
@@ -674,15 +744,11 @@ async function startServer() {
 
     try {
       // 1. Validate API Key and find server
-      const serversRef = db.collection("servers");
-      const q = serversRef.where("apiKey", "==", apiKey).limit(1);
-      const snapshot = await q.get();
-
-      if (snapshot.empty) {
+      const serverDoc = await findServerByApiKey(db, apiKey);
+      if (!serverDoc) {
         return res.status(401).json({ error: "Unauthorized: Invalid API key" });
       }
 
-      const serverDoc = snapshot.docs[0];
       const serverData = serverDoc.data();
       const serverId = serverDoc.id;
       const projectId = serverData.projectId;
@@ -845,6 +911,11 @@ async function startServer() {
 
   // Legacy Metrics Ingestion Endpoint (Simulated)
   app.post("/api/metrics/ingest", (req, res) => {
+    if (process.env.NEXO_DEMO_MODE !== "true") {
+      return res.status(410).json({
+        error: "Legacy simulated ingestion is disabled. Use /api/v1/telemetry with X-Nexo-API-Key.",
+      });
+    }
     const { projectId, metrics } = req.body;
     console.log(`Ingesting metrics for project ${projectId}:`, metrics);
     

@@ -5,6 +5,10 @@
  * It periodically collects system metrics and sends them to the Nexo API.
  */
 
+if (process.env.NEXO_DEMO_MODE !== 'true') {
+  throw new Error('metrics-collector.js is demo-only. Set NEXO_DEMO_MODE=true to run simulated telemetry.');
+}
+
 const API_ENDPOINT = process.env.NEXO_API_URL || 'http://localhost:3000/api/metrics/ingest';
 const PROJECT_ID = process.env.NEXO_PROJECT_ID || 'nexo-prod-cluster';
 const RESOURCE_ID = process.env.HOSTNAME || 'node-01';

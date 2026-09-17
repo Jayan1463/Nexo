@@ -6,7 +6,8 @@ import {
   Sun, 
   Moon,
   Search,
-  Command
+  Command,
+  Bell
 } from 'lucide-react';
 import { 
   db, 
@@ -14,7 +15,11 @@ import {
   getDoc, 
   collection, 
   onSnapshot, 
-  updateDoc
+  updateDoc,
+  query,
+  where,
+  orderBy,
+  limit
 } from '../firebase';
 import { useAppStore } from '../store';
 import { Organization, Project } from '../types';
@@ -36,6 +41,10 @@ export const TopBar = ({
   const [showOrgSwitcher, setShowOrgSwitcher] = useState(false);
   const [showProjectSwitcher, setShowProjectSwitcher] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchRows, setSearchRows] = useState<Array<{ type: string; title: string; subtitle: string }>>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const toggleTheme = () => {
@@ -58,21 +67,29 @@ export const TopBar = ({
         );
         
         const orgPromises = orgIds.map(async (id: string) => {
-          const oSnap = await getDoc(doc(db, 'organizations', id));
-          if (!oSnap.exists()) return null;
-          const data = oSnap.data() as Partial<Organization>;
-          return {
-            id: data.id || oSnap.id,
-            name: data.name || 'Untitled Organization',
-            ownerId: data.ownerId || user.uid,
-            plan: data.plan || 'free',
-            createdAt: data.createdAt,
-          } as Organization;
+          try {
+            const oSnap = await getDoc(doc(db, 'organizations', id));
+            if (!oSnap.exists()) return null;
+            const data = oSnap.data() as Partial<Organization>;
+            return {
+              id: data.id || oSnap.id,
+              name: data.name || 'Untitled Organization',
+              ownerId: data.ownerId || user.uid,
+              plan: data.plan || 'free',
+              createdAt: data.createdAt,
+            } as Organization;
+          } catch (error) {
+            console.error(`Failed to load organization ${id}`, error);
+            return null;
+          }
         });
         
         const orgList = (await Promise.all(orgPromises)).filter(o => o !== null) as Organization[];
         setOrgs(orgList);
       }
+    }, (error) => {
+      console.error('Failed to load current user profile in top bar', error);
+      setOrgs([]);
     });
 
     return () => unsubscribe();
@@ -99,10 +116,75 @@ export const TopBar = ({
       if (projectList.length > 0 && (!currentProjectId || !hasCurrentProject)) {
         setProject(projectList[0].id);
       }
+    }, (error) => {
+      console.error('Failed to load projects in top bar', error);
+      setProjects([]);
     });
 
     return () => unsubscribe();
   }, [currentOrgId, currentProjectId, setProject]);
+
+  useEffect(() => {
+    if (!currentProjectId) return;
+    const rows: Array<{ type: string; title: string; subtitle: string }> = [];
+    const pushAndFilter = () => {
+      const term = searchTerm.trim().toLowerCase();
+      setSearchRows(term ? rows.filter((row) => `${row.type} ${row.title} ${row.subtitle}`.toLowerCase().includes(term)).slice(0, 8) : []);
+    };
+    const handleSearchError = (label: string) => (error: unknown) => {
+      console.error(`Global search ${label} listener failed`, error);
+      setSearchRows([]);
+    };
+    const unsubServers = onSnapshot(query(collection(db, 'servers'), where('projectId', '==', currentProjectId)), (snapshot) => {
+      rows.splice(0, rows.length, ...rows.filter((row) => row.type !== 'Server'));
+      snapshot.docs.forEach((serverDoc) => {
+        const data = serverDoc.data() as any;
+        rows.push({ type: 'Server', title: data.name || serverDoc.id, subtitle: data.status || 'unknown' });
+      });
+      pushAndFilter();
+    }, handleSearchError('servers'));
+    const unsubAlerts = onSnapshot(query(collection(db, `projects/${currentProjectId}/alerts`), orderBy('timestamp', 'desc'), limit(50)), (snapshot) => {
+      rows.splice(0, rows.length, ...rows.filter((row) => row.type !== 'Alert'));
+      snapshot.docs.forEach((alertDoc) => {
+        const data = alertDoc.data() as any;
+        rows.push({ type: 'Alert', title: data.message || alertDoc.id, subtitle: `${data.severity || 'info'} · ${data.status || 'active'}` });
+      });
+      pushAndFilter();
+    }, handleSearchError('alerts'));
+    const unsubLogs = onSnapshot(query(collection(db, `projects/${currentProjectId}/logs`), orderBy('timestamp', 'desc'), limit(50)), (snapshot) => {
+      rows.splice(0, rows.length, ...rows.filter((row) => row.type !== 'Log'));
+      snapshot.docs.forEach((logDoc) => {
+        const data = logDoc.data() as any;
+        rows.push({ type: 'Log', title: data.message || logDoc.id, subtitle: `${data.level || 'info'} · ${data.service || 'system'}` });
+      });
+      pushAndFilter();
+    }, handleSearchError('logs'));
+    const unsubIncidents = onSnapshot(query(collection(db, `projects/${currentProjectId}/incidents`), orderBy('createdAt', 'desc'), limit(50)), (snapshot) => {
+      rows.splice(0, rows.length, ...rows.filter((row) => row.type !== 'Incident'));
+      snapshot.docs.forEach((incidentDoc) => {
+        const data = incidentDoc.data() as any;
+        rows.push({ type: 'Incident', title: data.title || incidentDoc.id, subtitle: data.status || 'investigating' });
+      });
+      pushAndFilter();
+    }, handleSearchError('incidents'));
+    return () => {
+      unsubServers();
+      unsubAlerts();
+      unsubLogs();
+      unsubIncidents();
+    };
+  }, [currentProjectId, searchTerm]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const notificationQuery = query(collection(db, 'notifications'), where('recipientUserId', '==', user.uid), orderBy('createdAt', 'desc'), limit(10));
+    return onSnapshot(notificationQuery, (snapshot) => {
+      setNotifications(snapshot.docs.map((notificationDoc) => ({ id: notificationDoc.id, ...notificationDoc.data() })));
+    }, (error) => {
+      console.error('Notifications listener failed', error);
+      setNotifications([]);
+    });
+  }, [user?.uid]);
 
   const currentOrg = orgs.find(o => o.id === currentOrgId);
   const currentProject = projects.find(p => p.id === currentProjectId);
@@ -363,14 +445,77 @@ export const TopBar = ({
             ref={searchInputRef}
             type="text" 
             placeholder="Search infrastructure..." 
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
             onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
+            onBlur={() => setTimeout(() => setSearchFocused(false), 150)}
             className="bg-transparent border-none outline-none text-sm font-bold text-zinc-900 dark:text-white placeholder:text-zinc-400 w-full tracking-tight"
           />
           <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-zinc-200 dark:bg-white/10 text-[10px] font-black text-zinc-500">
             <Command className="w-3 h-3" />
             <span>K</span>
           </div>
+          <AnimatePresence>
+            {searchFocused && searchRows.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                className="absolute top-20 left-0 w-96 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-2xl shadow-2xl p-2 z-50"
+              >
+                {searchRows.map((row, index) => (
+                  <button key={`${row.type}-${index}`} className="w-full text-left px-4 py-3 rounded-xl hover:bg-zinc-50 dark:hover:bg-white/5">
+                    <p className="text-[10px] uppercase tracking-widest font-black text-emerald-500">{row.type}</p>
+                    <p className="text-sm font-bold text-zinc-900 dark:text-white truncate">{row.title}</p>
+                    <p className="text-xs text-zinc-500 truncate">{row.subtitle}</p>
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        <div className="relative">
+          <button
+            onClick={() => setShowNotifications((prev) => !prev)}
+            className="h-16 w-16 flex items-center justify-center rounded-2xl bg-zinc-50 dark:bg-white/5 border border-zinc-200 dark:border-white/5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all hover:scale-105 active:scale-95 shadow-sm dark:shadow-none relative"
+            title="Notifications"
+          >
+            <Bell className="w-5 h-5" />
+            {notifications.some((notification) => !notification.read) && <span className="absolute top-4 right-4 w-2 h-2 rounded-full bg-emerald-500" />}
+          </button>
+          <AnimatePresence>
+            {showNotifications && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                className="absolute top-full right-0 mt-3 w-96 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-2xl shadow-2xl p-3 z-50"
+              >
+                <div className="flex items-center justify-between px-3 py-2">
+                  <p className="text-xs uppercase tracking-widest font-black text-zinc-500">Notifications</p>
+                  <button
+                    onClick={() => notifications.forEach((notification) => updateDoc(doc(db, 'notifications', notification.id), { read: true }).catch(() => undefined))}
+                    className="text-xs font-bold text-emerald-500"
+                  >
+                    Mark all read
+                  </button>
+                </div>
+                {notifications.length === 0 ? (
+                  <p className="px-3 py-8 text-center text-sm text-zinc-500">No notifications yet.</p>
+                ) : notifications.map((notification) => (
+                  <button
+                    key={notification.id}
+                    onClick={() => updateDoc(doc(db, 'notifications', notification.id), { read: true }).catch(() => undefined)}
+                    className="w-full text-left px-4 py-3 rounded-xl hover:bg-zinc-50 dark:hover:bg-white/5"
+                  >
+                    <p className="text-sm font-bold text-zinc-900 dark:text-white">{notification.title || notification.type}</p>
+                    <p className="text-xs text-zinc-500">{notification.message || 'Open related resource'}</p>
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         <button 

@@ -7,15 +7,30 @@ const roleRank: Record<AppRole, number> = {
   owner: 4,
 };
 
+const tabMinimumRole: Record<string, AppRole> = {
+  dashboard: 'viewer',
+  servers: 'viewer',
+  analytics: 'viewer',
+  logs: 'viewer',
+  alerts: 'developer',
+  incidents: 'developer',
+  cost: 'viewer',
+  risk: 'viewer',
+  status: 'viewer',
+  reports: 'viewer',
+  help: 'viewer',
+  team: 'admin',
+  apiKeys: 'admin',
+  audit: 'admin',
+  settings: 'admin',
+};
+
 export function hasRole(userRole: AppRole | null | undefined, minRole: AppRole) {
   const role = (userRole || 'viewer') as AppRole;
   return roleRank[role] >= roleRank[minRole];
 }
 
 export function canAccessTab(userRole: AppRole | null | undefined, tab: string) {
-  const role = (userRole || 'viewer') as AppRole;
-  if (tab === 'settings') return hasRole(role, 'admin');
-  if (tab === 'servers') return hasRole(role, 'admin');
-  if (tab === 'approvals') return hasRole(role, 'admin');
-  return true;
+  const minimumRole = tabMinimumRole[tab] || 'viewer';
+  return hasRole(userRole, minimumRole);
 }

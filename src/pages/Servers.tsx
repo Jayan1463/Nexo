@@ -30,7 +30,6 @@ import {
   onSnapshot, 
   doc, 
   setDoc, 
-  deleteDoc,
   serverTimestamp,
   handleFirestoreError,
   OperationType
@@ -39,9 +38,18 @@ import { useAppStore } from '../store';
 import { Server, ServerMetric, Project } from '../types';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
+import { writeAuditLog } from '../lib/audit';
+
+async function sha256Hex(input: string) {
+  const data = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 export const Servers = () => {
-  const { currentOrgId, currentProjectId, setProject } = useAppStore();
+  const { currentOrgId, currentProjectId, setProject, user } = useAppStore();
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -158,8 +166,10 @@ export const Servers = () => {
       return;
     }
 
-    const serverId = Math.random().toString(36).substring(2, 15);
-    const apiKey = 'nx_' + Math.random().toString(36).substring(2, 32);
+    const serverId = crypto.randomUUID();
+    const keyBytes = crypto.getRandomValues(new Uint8Array(32));
+    const apiKey = `nexo_live_${Array.from(keyBytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+    const apiKeyHash = await sha256Hex(apiKey);
 
     const tagsObject = tags.reduce((acc, tag) => {
       if (tag.key.trim() && tag.value.trim()) {
@@ -173,7 +183,8 @@ export const Servers = () => {
       id: serverId,
       projectId: effectiveProjectId,
       name: newServerName,
-      apiKey: apiKey,
+      apiKeyHash,
+      apiKeyStatus: 'active',
       status: 'offline',
       createdAt: serverTimestamp(),
       tags: tagsObject
@@ -181,6 +192,29 @@ export const Servers = () => {
 
     try {
       await setDoc(serverRef, newServer);
+      await setDoc(doc(db, `servers/${serverId}/audit_logs`, crypto.randomUUID()), {
+        event: 'api_key_created',
+        serverId,
+        projectId: effectiveProjectId,
+        createdAt: serverTimestamp(),
+      });
+      await writeAuditLog({
+        orgId: currentOrgId,
+        projectId: effectiveProjectId,
+        userId: user?.uid,
+        action: 'server_registered',
+        resource: 'server',
+        resourceId: serverId,
+        metadata: { name: newServerName.trim(), tags: tagsObject },
+      });
+      await writeAuditLog({
+        orgId: currentOrgId,
+        projectId: effectiveProjectId,
+        userId: user?.uid,
+        action: 'api_key_generated',
+        resource: 'server',
+        resourceId: serverId,
+      });
       setGeneratedConfig({ id: serverId, apiKey });
       setNewServerName('');
       setTags([{ key: '', value: '' }]);
@@ -199,7 +233,29 @@ export const Servers = () => {
   };
 
   const handleDeleteServer = async (serverId: string) => {
-    await deleteDoc(doc(db, 'servers', serverId));
+    await setDoc(doc(db, 'servers', serverId), {
+      status: 'offline',
+      apiKeyStatus: 'revoked',
+      deletedAt: serverTimestamp(),
+    }, { merge: true });
+    await setDoc(doc(db, `servers/${serverId}/audit_logs`, crypto.randomUUID()), {
+      event: 'api_key_revoked',
+      serverId,
+      createdAt: serverTimestamp(),
+    });
+    await writeAuditLog({
+      orgId: currentOrgId,
+      projectId: currentProjectId,
+      userId: user?.uid,
+      action: 'server_removed',
+      resource: 'server',
+      resourceId: serverId,
+    });
+  };
+
+  const handleUpdatePublicStatus = async (serverId: string, updates: Partial<Server>) => {
+    await setDoc(doc(db, 'servers', serverId), updates, { merge: true });
+    setSelectedServer((prev) => prev && prev.id === serverId ? { ...prev, ...updates } : prev);
   };
 
   const copyToClipboard = (text: string) => {
@@ -444,11 +500,15 @@ const API_URL = '${window.location.origin}/api/metrics';
 
 async function collectAndSend() {
   try {
-    const [cpu, mem, net, fs] = await Promise.all([
+    const [cpu, mem, net, fs, processes, connections, services, time] = await Promise.all([
       si.currentLoad(),
       si.mem(),
       si.networkStats(),
-      si.fsSize()
+      si.fsSize(),
+      si.processes(),
+      si.networkConnections(),
+      si.services('*'),
+      si.time()
     ]);
 
     const metrics = {
@@ -457,6 +517,10 @@ async function collectAndSend() {
       memory: Math.round((mem.active / mem.total) * 100),
       network: Math.round((net[0].rx_sec + net[0].tx_sec) / 1024),
       disk: Math.round(fs[0].use),
+      uptime: time.uptime,
+      processes: processes.list.slice(0, 20).map((p) => ({ pid: p.pid, name: p.name, cpu: p.cpu, memory: p.mem })),
+      ports: connections.slice(0, 50).map((conn) => conn.localPort).filter(Boolean),
+      services: services.slice(0, 30).map((svc) => ({ name: svc.name, status: svc.running ? 'running' : 'stopped' })),
       timestamp: new Date().toISOString()
     };
 
@@ -469,7 +533,7 @@ async function collectAndSend() {
 
     console.log(\`[\${new Date().toLocaleTimeString()}] Metrics sent: CPU \${metrics.cpu}% | MEM \${metrics.memory}%\`);
   } catch (error) {
-    console.error(\`❌ Error: \`, error.message);
+    console.error('Agent error:', error.message);
   }
 }
 
@@ -487,11 +551,15 @@ const API_URL = '${window.location.origin}/api/metrics';
 
 async function collectAndSend() {
   try {
-    const [cpu, mem, net, fs] = await Promise.all([
+    const [cpu, mem, net, fs, processes, connections, services, time] = await Promise.all([
       si.currentLoad(),
       si.mem(),
       si.networkStats(),
-      si.fsSize()
+      si.fsSize(),
+      si.processes(),
+      si.networkConnections(),
+      si.services('*'),
+      si.time()
     ]);
 
     const metrics = {
@@ -500,6 +568,10 @@ async function collectAndSend() {
       memory: Math.round((mem.active / mem.total) * 100),
       network: Math.round((net[0].rx_sec + net[0].tx_sec) / 1024),
       disk: Math.round(fs[0].use),
+      uptime: time.uptime,
+      processes: processes.list.slice(0, 20).map((p) => ({ pid: p.pid, name: p.name, cpu: p.cpu, memory: p.mem })),
+      ports: connections.slice(0, 50).map((conn) => conn.localPort).filter(Boolean),
+      services: services.slice(0, 30).map((svc) => ({ name: svc.name, status: svc.running ? 'running' : 'stopped' })),
       timestamp: new Date().toISOString()
     };
 
@@ -512,7 +584,7 @@ async function collectAndSend() {
 
     console.log(\`[\${new Date().toLocaleTimeString()}] Metrics sent: CPU \${metrics.cpu}% | MEM \${metrics.memory}%\`);
   } catch (error) {
-    console.error(\`❌ Error: \`, error.message);
+    console.error('Agent error:', error.message);
   }
 }
 
@@ -655,12 +727,18 @@ collectAndSend();`;
                       <div className="space-y-4">
                         <div className="flex items-center justify-between">
                           <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Provisioning Key</p>
-                          <button onClick={() => copyToClipboard(selectedServer.apiKey)} className="text-zinc-400 hover:text-emerald-500 transition-colors">
+                          <button
+                            onClick={() => selectedServer.apiKey ? copyToClipboard(selectedServer.apiKey) : undefined}
+                            disabled={!selectedServer.apiKey}
+                            className="text-zinc-400 hover:text-emerald-500 transition-colors disabled:opacity-30"
+                          >
                             {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                           </button>
                         </div>
                         <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-white/5 relative group">
-                          <code className="text-xs text-emerald-500 font-mono block truncate font-bold">{selectedServer.apiKey}</code>
+                          <code className="text-xs text-emerald-500 font-mono block truncate font-bold">
+                            {selectedServer.apiKey ? selectedServer.apiKey : 'Stored as SHA-256 hash. New keys are shown only once.'}
+                          </code>
                           <div className="absolute inset-0 bg-zinc-900/80 dark:bg-zinc-950/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-2xl">
                             <span className="text-[10px] font-black text-white uppercase tracking-widest">Click to copy</span>
                           </div>
@@ -679,7 +757,7 @@ collectAndSend();`;
                           <div className="space-y-4 animate-in zoom-in-95 duration-300">
                             <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl">
                               <p className="text-[10px] font-black text-red-500 uppercase tracking-widest text-center leading-relaxed">
-                                This action is irreversible. All telemetry data will be purged.
+                                This revokes the ingestion key and marks the node offline. Historical alerts and incidents are retained.
                               </p>
                             </div>
                             <div className="flex gap-3">
@@ -703,6 +781,29 @@ collectAndSend();`;
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    <div className="bg-zinc-50 dark:bg-zinc-950/50 rounded-[2rem] p-6 border border-zinc-200 dark:border-white/5 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black text-zinc-900 dark:text-white uppercase tracking-widest">Public Status Page</span>
+                        <button
+                          onClick={() => handleUpdatePublicStatus(selectedServer.id, { publicStatusEnabled: !selectedServer.publicStatusEnabled })}
+                          className={cn(
+                            "w-11 h-6 rounded-full relative transition-colors",
+                            selectedServer.publicStatusEnabled ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700"
+                          )}
+                        >
+                          <span className={cn("absolute top-1 w-4 h-4 bg-white rounded-full transition-all", selectedServer.publicStatusEnabled ? "left-6" : "left-1")} />
+                        </button>
+                      </div>
+                      <input
+                        value={selectedServer.publicName || selectedServer.name}
+                        onChange={(event) => handleUpdatePublicStatus(selectedServer.id, { publicName: event.target.value })}
+                        className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white"
+                      />
+                      <p className="text-xs text-zinc-500 leading-relaxed">
+                        The public page uses this display name and high-level status only.
+                      </p>
                     </div>
 
                     <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-[2rem] p-6 space-y-4">

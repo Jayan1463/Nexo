@@ -38,10 +38,16 @@ export interface Metric {
 export interface Alert {
   id?: string;
   projectId: string;
+  serverId?: string;
+  alertType?: 'cpu' | 'memory' | 'disk' | 'network' | 'availability' | 'security';
   severity: 'info' | 'warning' | 'critical';
   message: string;
-  status: 'active' | 'resolved';
+  status: 'active' | 'acknowledged' | 'resolved';
   timestamp: any;
+  acknowledgedBy?: string;
+  acknowledgedAt?: any;
+  resolvedBy?: string;
+  resolvedAt?: any;
 }
 
 export interface LogEntry {
@@ -75,11 +81,16 @@ export interface Server {
   id: string;
   projectId: string;
   name: string;
-  apiKey: string;
+  apiKey?: string;
+  apiKeyHash?: string;
+  apiKeyStatus?: 'active' | 'revoked';
   lastSeen?: any;
-  status: 'online' | 'offline';
+  status: 'online' | 'degraded' | 'offline';
   createdAt: any;
   tags?: Record<string, string>;
+  environment?: 'prod' | 'staging' | 'dev';
+  publicStatusEnabled?: boolean;
+  publicName?: string;
 }
 
 export interface ServerMetric {
@@ -89,5 +100,43 @@ export interface ServerMetric {
   cpu: number;
   memory: number;
   network: number;
+  disk?: number;
+  uptime?: number;
+  processes?: Array<{ pid?: number; name: string; cpu?: number; memory?: number }>;
+  ports?: Array<number | string>;
+  services?: Array<{ name: string; status: string }>;
   timestamp: any;
+}
+
+export interface Incident {
+  id?: string;
+  projectId: string;
+  serverId?: string;
+  title: string;
+  status: 'investigating' | 'identified' | 'monitoring' | 'resolved';
+  severity: 'info' | 'warning' | 'critical';
+  summary: string;
+  publicVisible?: boolean;
+  timeline: Array<{
+    status: string;
+    message: string;
+    userId?: string;
+    timestamp: any;
+  }>;
+  createdAt: any;
+  updatedAt?: any;
+  resolvedAt?: any;
+}
+
+export interface RiskInsight {
+  id?: string;
+  serverId: string;
+  projectId?: string;
+  type: string;
+  severity: 'info' | 'warning' | 'critical';
+  message: string;
+  status: 'open' | 'under_review' | 'dismissed';
+  score?: number;
+  createdAt: any;
+  updatedAt?: any;
 }

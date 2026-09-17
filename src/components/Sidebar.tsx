@@ -11,12 +11,21 @@ import {
   Zap,
   Server,
   ChevronLeft,
-  Menu
+  Menu,
+  Flame,
+  ShieldAlert,
+  BookOpen,
+  Radio,
+  Users,
+  KeyRound,
+  ClipboardList,
+  FileBarChart
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { auth, signOut } from '../firebase';
 import { useAppStore } from '../store';
 import { motion, AnimatePresence } from 'framer-motion';
+import { AppRole, canAccessTab } from '../lib/rbac';
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Dashboard', id: 'dashboard' },
@@ -24,19 +33,22 @@ const menuItems = [
   { icon: BarChart3, label: 'Analytics', id: 'analytics' },
   { icon: FileText, label: 'Logs', id: 'logs' },
   { icon: Bell, label: 'Alerts', id: 'alerts' },
+  { icon: Flame, label: 'Incidents', id: 'incidents' },
   { icon: DollarSign, label: 'Cost Intelligence', id: 'cost' },
+  { icon: ShieldAlert, label: 'Risk Analysis', id: 'risk' },
+  { icon: Radio, label: 'Status Page', id: 'status' },
+  { icon: Users, label: 'Team', id: 'team' },
+  { icon: KeyRound, label: 'API Keys', id: 'apiKeys' },
+  { icon: ClipboardList, label: 'Audit Logs', id: 'audit' },
+  { icon: FileBarChart, label: 'Reports', id: 'reports' },
+  { icon: BookOpen, label: 'Help & Docs', id: 'help' },
   { icon: Settings, label: 'Settings', id: 'settings' },
 ];
 
-export const Sidebar = ({ activeTab, setActiveTab, userRole }: { activeTab: string, setActiveTab: (id: string) => void, userRole: 'owner' | 'admin' | 'developer' | 'viewer' }) => {
+export const Sidebar = ({ activeTab, setActiveTab, userRole }: { activeTab: string, setActiveTab: (id: string) => void, userRole: AppRole }) => {
   const { isSidebarCollapsed, setSidebarCollapsed } = useAppStore();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
-  const filteredMenu = menuItems.filter((item) => {
-    if (item.id === 'servers' || item.id === 'settings') {
-      return userRole === 'admin' || userRole === 'owner';
-    }
-    return true;
-  });
+  const filteredMenu = menuItems.filter((item) => canAccessTab(userRole, item.id));
 
   return (
     <>

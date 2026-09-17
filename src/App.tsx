@@ -7,6 +7,7 @@ import {
   googleProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   updateProfile,
   db,
   doc,
@@ -36,6 +37,14 @@ import { Logs } from './pages/Logs';
 import { Alerts } from './pages/Alerts';
 import { Cost } from './pages/Cost';
 import { Settings } from './pages/Settings';
+import { Incidents } from './pages/Incidents';
+import { RiskAnalysis } from './pages/RiskAnalysis';
+import { StatusPage } from './pages/StatusPage';
+import { HelpDocs } from './pages/HelpDocs';
+import { Team } from './pages/Team';
+import { ApiKeys } from './pages/ApiKeys';
+import { AuditLogs } from './pages/AuditLogs';
+import { Reports } from './pages/Reports';
 import { 
   Zap, 
   ArrowRight,
@@ -45,11 +54,72 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { AppRole, canAccessTab } from './lib/rbac';
 import { FirebaseError } from 'firebase/app';
 
-const makeInviteCode = () => Math.random().toString(36).slice(2, 10).toUpperCase();
+const makeInviteCode = () => crypto.randomUUID().replace(/-/g, '').slice(0, 20).toUpperCase();
+
+const E2E_AUTH_STORAGE_KEY = 'nexo:e2e-auth';
+
+function getE2EUser() {
+  const enabled = import.meta.env.DEV && import.meta.env.VITE_ENABLE_E2E_AUTH === 'true';
+  if (!enabled || localStorage.getItem(E2E_AUTH_STORAGE_KEY) !== 'owner') return null;
+
+  return {
+    uid: 'e2e-owner',
+    email: 'e2e-owner@nexocloud.local',
+    displayName: 'E2E Owner',
+    photoURL: null,
+    emailVerified: true,
+    isAnonymous: false,
+    tenantId: null,
+    providerData: [],
+  } as any;
+}
+
+class RouteErrorBoundary extends React.Component<
+  { routeKey: string; children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  state = { hasError: false, message: '' };
+
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      hasError: true,
+      message: error instanceof Error ? error.message : 'This module failed to render.',
+    };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('Nexo Cloud module crashed', error);
+  }
+
+  componentDidUpdate(previousProps: { routeKey: string }) {
+    if (previousProps.routeKey !== this.props.routeKey && this.state.hasError) {
+      this.setState({ hasError: false, message: '' });
+    }
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+
+    return (
+      <div className="p-8 max-w-4xl mx-auto">
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-red-500">
+          <p className="text-lg font-black text-zinc-900 dark:text-white">This module hit an error.</p>
+          <p className="mt-2 text-sm text-red-500">{this.state.message}</p>
+          <button
+            onClick={() => this.setState({ hasError: false, message: '' })}
+            className="mt-4 rounded-xl bg-red-500 px-4 py-2 text-sm font-black text-white"
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
 
 export default function App() {
   const { user, setUser, currentOrgId, setOrg, setProject, theme, isSidebarCollapsed } = useAppStore();
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'dashboard');
   const [userRole, setUserRole] = useState<AppRole>('viewer');
   const [loading, setLoading] = useState(true);
   const inviteHandledRef = useRef(false);
@@ -66,14 +136,19 @@ export default function App() {
   useEffect(() => {
     inviteHandledRef.current = false;
     let unsubscribeUserDoc: (() => void) | null = null;
+    const e2eUser = getE2EUser();
+    if (e2eUser) {
+      setUser(e2eUser);
+      setOrg('e2e-org');
+      setProject('e2e-project');
+      setUserRole('owner');
+      setLoading(false);
+      return () => undefined;
+    }
+
     const generateUniqueInviteCode = async () => {
-      for (let i = 0; i < 10; i += 1) {
-        const candidate = makeInviteCode();
-        const q = query(collection(db, 'organizations'), where('inviteCode', '==', candidate), limit(1));
-        const snap = await getDocs(q);
-        if (snap.empty) return candidate;
-      }
-      return `${makeInviteCode()}${Math.floor(Math.random() * 100)}`;
+      // New users cannot enumerate organizations under membership-based rules.
+      return makeInviteCode();
     };
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       try {
@@ -225,7 +300,19 @@ export default function App() {
         unsubscribeUserDoc = onSnapshot(userDocRef, async (snap) => {
           if (!snap.exists()) return;
           const data = snap.data() as any;
-          const role = (data?.role || 'viewer') as AppRole;
+          const nextOrgId = typeof data?.currentOrgId === 'string' ? data.currentOrgId : useAppStore.getState().currentOrgId;
+          let role = (data?.role || 'viewer') as AppRole;
+          if (nextOrgId) {
+            try {
+              const memberSnap = await getDoc(doc(db, `organizations/${nextOrgId}/members`, firebaseUser.uid));
+              const memberRole = memberSnap.exists() ? memberSnap.data()?.role : null;
+              if (memberRole === 'owner' || memberRole === 'admin' || memberRole === 'developer' || memberRole === 'viewer') {
+                role = memberRole;
+              }
+            } catch (error) {
+              console.error('Failed to load membership role', error);
+            }
+          }
           setUserRole(role);
           const activeOrgId = useAppStore.getState().currentOrgId;
           if (data?.currentOrgId && data.currentOrgId !== activeOrgId) {
@@ -369,6 +456,10 @@ export default function App() {
     );
   }
 
+  if (!user && window.location.pathname.startsWith('/status')) {
+    return <StatusPage />;
+  }
+
   if (!user) {
     return <LoginPage />;
   }
@@ -395,13 +486,23 @@ export default function App() {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
           >
-            {activeTab === 'dashboard' && <Dashboard />}
-            {activeTab === 'servers' && <Servers />}
-            {activeTab === 'analytics' && <Analytics />}
-            {activeTab === 'logs' && <Logs />}
-            {activeTab === 'alerts' && <Alerts />}
-            {activeTab === 'cost' && <Cost />}
-            {activeTab === 'settings' && <Settings />}
+            <RouteErrorBoundary routeKey={activeTab}>
+              {activeTab === 'dashboard' && <Dashboard />}
+              {activeTab === 'servers' && <Servers />}
+              {activeTab === 'analytics' && <Analytics />}
+              {activeTab === 'logs' && <Logs />}
+              {activeTab === 'alerts' && <Alerts />}
+              {activeTab === 'incidents' && <Incidents />}
+              {activeTab === 'cost' && <Cost />}
+              {activeTab === 'risk' && <RiskAnalysis />}
+              {activeTab === 'status' && <StatusPage />}
+              {activeTab === 'team' && <Team />}
+              {activeTab === 'apiKeys' && <ApiKeys />}
+              {activeTab === 'audit' && <AuditLogs />}
+              {activeTab === 'reports' && <Reports />}
+              {activeTab === 'help' && <HelpDocs />}
+              {activeTab === 'settings' && <Settings />}
+            </RouteErrorBoundary>
           </motion.div>
         </AnimatePresence>
       </main>
@@ -418,6 +519,7 @@ const LoginPage = () => {
   const [submittingEmail, setSubmittingEmail] = useState(false);
   const [submittingGoogle, setSubmittingGoogle] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
   const submitting = submittingEmail || submittingGoogle;
 
   const handleGoogleLogin = async () => {
@@ -512,33 +614,78 @@ const LoginPage = () => {
       setSubmittingEmail(false);
     }
   };
+  const handleForgotPassword = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setErrorMessage('Enter your email address first.');
+      return;
+    }
+    try {
+      setErrorMessage('');
+      await sendPasswordResetEmail(auth, normalizedEmail);
+      setInfoMessage('Password reset email sent.');
+    } catch (error) {
+      console.error('Password reset failed', error);
+      setErrorMessage('Could not send password reset email.');
+    }
+  };
   useEffect(() => {
     setErrorMessage('');
+    setInfoMessage('');
   }, [mode]);
 
   return (
     <div className="min-h-screen w-screen bg-white text-zinc-900">
       <div className="min-h-screen grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="px-8 md:px-14 py-14 lg:py-20 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-zinc-200 bg-zinc-50">
-          <div className="inline-flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-zinc-900 flex items-center justify-center shadow-sm">
-              <Zap className="text-white w-6 h-6 fill-current" />
+        <section className="px-8 md:px-14 py-8 lg:py-12 flex flex-col justify-between border-b lg:border-b-0 lg:border-r border-zinc-200 bg-zinc-50 gap-10">
+          <nav className="flex items-center justify-between gap-4">
+            <div className="inline-flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-zinc-900 flex items-center justify-center shadow-sm">
+                <Zap className="text-white w-6 h-6 fill-current" />
+              </div>
+              <span className="text-xl md:text-2xl font-extrabold tracking-tight text-zinc-900">Nexo Cloud</span>
             </div>
-            <span className="text-xl md:text-2xl font-extrabold tracking-tight text-zinc-900">Nexo Cloud</span>
+            <div className="hidden xl:flex items-center gap-5 text-xs font-black uppercase tracking-widest text-zinc-500">
+              <a href="#features">Features</a>
+              <a href="#infrastructure">Infrastructure</a>
+              <a href="#security">Security</a>
+              <a href="#docs">Documentation</a>
+              <a href="/status">Status</a>
+            </div>
+          </nav>
+
+          <div className="max-w-3xl space-y-7">
+            <p className="text-xs uppercase tracking-[0.28em] text-emerald-600 font-bold">Observe. Predict. Protect.</p>
+            <h1 className="text-5xl md:text-7xl font-black leading-[1.02] tracking-tight text-zinc-900">
+              Your Infrastructure. One Intelligent View.
+            </h1>
+            <p className="text-zinc-600 text-base md:text-lg max-w-2xl leading-relaxed">
+              Real-time infrastructure monitoring, centralized logs, incident management, risk intelligence, public status, and estimated cloud cost visibility in one NEXO CLOUD workspace.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => setMode('signup')} className="bg-zinc-900 text-white px-6 py-3 rounded-xl font-black">Start Monitoring</button>
+              <a href="/status" className="border border-zinc-300 px-6 py-3 rounded-xl font-black text-zinc-900">View Status</a>
+            </div>
           </div>
 
-          <div className="max-w-2xl space-y-6">
-            <p className="text-xs uppercase tracking-[0.28em] text-zinc-500 font-bold">Cloud Operations Platform</p>
-            <h1 className="text-4xl md:text-6xl font-black leading-[1.05] tracking-tight text-zinc-900">
-              Secure Infrastructure Visibility, Built For Real Teams
-            </h1>
-            <p className="text-zinc-600 text-base md:text-lg max-w-xl leading-relaxed">
-              Monitor services, control access, and collaborate on incidents from one workspace designed for speed and reliability.
-            </p>
+          <div id="features" className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {['Infrastructure Monitoring', 'Metrics', 'Logs', 'Alerts', 'Incidents', 'Risk Analysis', 'Cost Intelligence', 'Public Status Page'].map((feature) => (
+              <div key={feature} className="bg-white border border-zinc-200 rounded-xl p-4 text-sm font-bold text-zinc-700">{feature}</div>
+            ))}
+          </div>
+
+          <div id="infrastructure" className="bg-zinc-900 text-white rounded-2xl p-6 font-mono text-xs leading-7">
+            Server → Nexo Monitoring Agent → Secure Telemetry API → Node/Express Backend → Firestore → Real-Time Nexo Dashboard
+          </div>
+
+          <div id="security" className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {['Firebase Auth + RBAC', 'Hashed API keys', 'Firestore security rules'].map((item) => (
+              <div key={item} className="bg-white border border-zinc-200 rounded-xl p-4 text-xs font-black uppercase tracking-widest text-zinc-500">{item}</div>
+            ))}
           </div>
 
           <div className="text-xs text-zinc-500">
-            By continuing, you agree to our <span className="underline decoration-zinc-400">Terms</span> and <span className="underline decoration-zinc-400">Privacy Policy</span>.
+            <span id="docs">Documentation, monitoring-agent setup, API reference, and deployment notes are included in the repository.</span>
           </div>
         </section>
 
@@ -624,11 +771,21 @@ const LoginPage = () => {
               >
                 {submittingEmail ? 'Please wait...' : mode === 'login' ? 'Login with Email' : 'Create Account'}
               </button>
+              {mode === 'login' && (
+                <button type="button" onClick={handleForgotPassword} className="w-full text-sm font-bold text-zinc-500 hover:text-zinc-900">
+                  Forgot password?
+                </button>
+              )}
             </form>
 
             {errorMessage && (
               <div className="rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-xs text-left">
                 {errorMessage}
+              </div>
+            )}
+            {infoMessage && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-xs text-left">
+                {infoMessage}
               </div>
             )}
 

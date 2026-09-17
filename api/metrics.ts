@@ -1,9 +1,9 @@
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
+import crypto from "crypto";
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0298517899";
-const FIREBASE_DATABASE_ID =
-  process.env.FIREBASE_DATABASE_ID || "ai-studio-a6e8cce4-ae5a-499a-9a1c-ced13c60c908";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nexocloud-software";
+const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || "(default)";
 
 function parseServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -41,6 +41,22 @@ function getDb() {
   return getFirestore(app);
 }
 
+function hashApiKey(apiKey: string) {
+  return crypto.createHash("sha256").update(apiKey).digest("hex");
+}
+
+async function findServerByApiKey(db: FirebaseFirestore.Firestore, apiKey: string) {
+  const hashed = await db.collection("servers")
+    .where("apiKeyHash", "==", hashApiKey(apiKey))
+    .where("apiKeyStatus", "==", "active")
+    .limit(1)
+    .get();
+  if (!hashed.empty) return hashed.docs[0];
+  const legacy = await db.collection("servers").where("apiKey", "==", apiKey).limit(1).get();
+  const legacyDoc = legacy.docs[0];
+  return legacyDoc && legacyDoc.data().apiKeyStatus !== "revoked" ? legacyDoc : null;
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method === "OPTIONS") {
     res.setHeader("Allow", "POST, OPTIONS");
@@ -52,16 +68,18 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const headerKey = typeof req.headers["x-nexo-api-key"] === "string" ? req.headers["x-nexo-api-key"] : "";
   const authHeader = req.headers.authorization || "";
-  if (!authHeader.startsWith("Bearer ")) {
+  if (!headerKey && !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized: Missing or invalid API key" });
   }
 
-  const apiKey = authHeader.slice("Bearer ".length).trim();
-  const { cpu, memory, network, timestamp } = req.body || {};
+  const apiKey = headerKey || authHeader.slice("Bearer ".length).trim();
+  const { cpu, memory, network, disk, uptime, processes, ports, services, timestamp } = req.body || {};
   const cpuValue = Number(cpu);
   const memoryValue = Number(memory);
   const networkValue = Number(network);
+  const diskValue = Number.isFinite(Number(disk)) ? Number(disk) : 0;
 
   if (!Number.isFinite(cpuValue) || cpuValue < 0 || cpuValue > 100) {
     return res.status(400).json({ error: "cpu must be a number between 0 and 100" });
@@ -72,23 +90,26 @@ export default async function handler(req: any, res: any) {
   if (!Number.isFinite(networkValue) || networkValue < 0) {
     return res.status(400).json({ error: "network must be a non-negative number" });
   }
+  if (!Number.isFinite(diskValue) || diskValue < 0 || diskValue > 100) {
+    return res.status(400).json({ error: "disk must be a number between 0 and 100 when provided" });
+  }
 
   try {
     const db = getDb();
-    const serverSnap = await db.collection("servers").where("apiKey", "==", apiKey).limit(1).get();
-    if (serverSnap.empty) {
+    const serverDoc = await findServerByApiKey(db, apiKey);
+    if (!serverDoc) {
       return res.status(401).json({ error: "Unauthorized: Invalid API key" });
     }
 
-    const serverDoc = serverSnap.docs[0];
     const serverData = serverDoc.data() as any;
     const serverId = serverDoc.id;
     const projectId = String(serverData.projectId || "");
 
     await serverDoc.ref.set(
       {
-        status: "online",
+        status: cpuValue >= 90 || memoryValue >= 90 || diskValue >= 90 ? "degraded" : "online",
         lastSeen: new Date().toISOString(),
+        apiKeyLastUsed: new Date().toISOString(),
       },
       { merge: true },
     );
@@ -101,6 +122,11 @@ export default async function handler(req: any, res: any) {
       cpu: cpuValue,
       memory: memoryValue,
       network: networkValue,
+      disk: diskValue,
+      uptime: Number.isFinite(Number(uptime)) ? Number(uptime) : 0,
+      processes: Array.isArray(processes) ? processes.slice(0, 100) : [],
+      ports: Array.isArray(ports) ? ports.slice(0, 100) : [],
+      services: Array.isArray(services) ? services.slice(0, 100) : [],
       timestamp: timestamp || new Date().toISOString(),
     });
 
@@ -111,7 +137,7 @@ export default async function handler(req: any, res: any) {
     const memoryWarning = Number(rules.memoryWarning ?? 90);
     const memoryCritical = Number(rules.memoryCritical ?? 95);
 
-    const pendingAlerts: Array<{ alertType: "cpu" | "memory"; severity: "warning" | "critical"; message: string }> = [];
+    const pendingAlerts: Array<{ alertType: "cpu" | "memory" | "disk"; severity: "warning" | "critical"; message: string }> = [];
     if (cpuValue >= cpuCritical) {
       pendingAlerts.push({ alertType: "cpu", severity: "critical", message: `High CPU detected on ${serverData.name}: ${cpuValue.toFixed(1)}%` });
     } else if (cpuValue >= cpuWarning) {
@@ -122,8 +148,26 @@ export default async function handler(req: any, res: any) {
     } else if (memoryValue >= memoryWarning) {
       pendingAlerts.push({ alertType: "memory", severity: "warning", message: `Elevated Memory detected on ${serverData.name}: ${memoryValue.toFixed(1)}%` });
     }
+    if (diskValue >= 95) {
+      pendingAlerts.push({ alertType: "disk", severity: "critical", message: `Disk capacity risk detected on ${serverData.name}: ${diskValue.toFixed(1)}%` });
+    } else if (diskValue >= 90) {
+      pendingAlerts.push({ alertType: "disk", severity: "warning", message: `Disk usage elevated on ${serverData.name}: ${diskValue.toFixed(1)}%` });
+    }
 
     for (const candidate of pendingAlerts) {
+      const recentAlertsSnap = await db.collection("projects").doc(projectId).collection("alerts")
+        .where("serverId", "==", serverId)
+        .where("status", "==", "active")
+        .limit(50)
+        .get();
+      const inCooldown = recentAlertsSnap.docs.some((docSnap) => {
+        const data = docSnap.data() as any;
+        if (data.alertType !== candidate.alertType) return false;
+        const ts = new Date(String(data.timestamp || 0)).getTime();
+        return Number.isFinite(ts) && Date.now() - ts < 15 * 60 * 1000;
+      });
+      if (inCooldown) continue;
+
       const alertRef = db.collection("projects").doc(projectId).collection("alerts").doc();
       await alertRef.set({
         id: alertRef.id,
@@ -135,6 +179,23 @@ export default async function handler(req: any, res: any) {
         status: "active",
         timestamp: new Date().toISOString(),
       });
+      if (candidate.severity === "critical") {
+        const incidentRef = db.collection("projects").doc(projectId).collection("incidents").doc();
+        const now = new Date().toISOString();
+        await incidentRef.set({
+          id: incidentRef.id,
+          projectId,
+          serverId,
+          title: candidate.message,
+          severity: candidate.severity,
+          status: "investigating",
+          summary: "Auto-created from critical telemetry.",
+          publicVisible: Boolean(serverData.publicStatusEnabled),
+          timeline: [{ status: "investigating", message: "Incident opened automatically.", timestamp: now }],
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
     }
 
     return res.status(200).json({ success: true, serverId });

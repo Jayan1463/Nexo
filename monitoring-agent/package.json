@@ -1,0 +1,14 @@
+{
+  "name": "@nexo-cloud/monitoring-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight Nexo Cloud monitoring agent for Linux, Windows, and macOS.",
+  "type": "module",
+  "main": "src/agent.js",
+  "scripts": {
+    "start": "node src/agent.js"
+  },
+  "dependencies": {
+    "systeminformation": "^5.27.12"
+  }
+}

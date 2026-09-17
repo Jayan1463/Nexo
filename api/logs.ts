@@ -1,9 +1,9 @@
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
+import crypto from "crypto";
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0298517899";
-const FIREBASE_DATABASE_ID =
-  process.env.FIREBASE_DATABASE_ID || "ai-studio-a6e8cce4-ae5a-499a-9a1c-ced13c60c908";
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nexocloud-software";
+const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || "(default)";
 
 function parseServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -41,6 +41,22 @@ function getDb() {
   return getFirestore(app);
 }
 
+function hashApiKey(apiKey: string) {
+  return crypto.createHash("sha256").update(apiKey).digest("hex");
+}
+
+async function findServerByApiKey(db: FirebaseFirestore.Firestore, apiKey: string) {
+  const hashed = await db.collection("servers")
+    .where("apiKeyHash", "==", hashApiKey(apiKey))
+    .where("apiKeyStatus", "==", "active")
+    .limit(1)
+    .get();
+  if (!hashed.empty) return hashed.docs[0];
+  const legacy = await db.collection("servers").where("apiKey", "==", apiKey).limit(1).get();
+  const legacyDoc = legacy.docs[0];
+  return legacyDoc && legacyDoc.data().apiKeyStatus !== "revoked" ? legacyDoc : null;
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method === "OPTIONS") {
     res.setHeader("Allow", "POST, OPTIONS");
@@ -52,12 +68,13 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  const headerKey = typeof req.headers["x-nexo-api-key"] === "string" ? req.headers["x-nexo-api-key"] : "";
   const authHeader = req.headers.authorization || "";
-  if (!authHeader.startsWith("Bearer ")) {
+  if (!headerKey && !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Unauthorized: Missing or invalid API key" });
   }
 
-  const apiKey = authHeader.slice("Bearer ".length).trim();
+  const apiKey = headerKey || authHeader.slice("Bearer ".length).trim();
   const { level, message, service, timestamp } = req.body || {};
   const normalizedLevel = level === "info" || level === "warn" || level === "error" ? level : "info";
   if (typeof message !== "string" || !message.trim()) {
@@ -69,11 +86,10 @@ export default async function handler(req: any, res: any) {
 
   try {
     const db = getDb();
-    const serverSnap = await db.collection("servers").where("apiKey", "==", apiKey).limit(1).get();
-    if (serverSnap.empty) {
+    const serverDoc = await findServerByApiKey(db, apiKey);
+    if (!serverDoc) {
       return res.status(401).json({ error: "Unauthorized: Invalid API key" });
     }
-    const serverDoc = serverSnap.docs[0];
     const serverData = serverDoc.data() as any;
     const serverId = serverDoc.id;
     const projectId = String(serverData.projectId || "");
