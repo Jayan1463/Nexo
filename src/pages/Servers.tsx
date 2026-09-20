@@ -36,7 +36,7 @@ import {
 } from '../firebase';
 import { useAppStore } from '../store';
 import { Server, ServerMetric, Project } from '../types';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { writeAuditLog } from '../lib/audit';
 
@@ -48,16 +48,32 @@ async function sha256Hex(input: string) {
     .join('');
 }
 
+const toDate = (value: any): Date | null => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value.toDate === 'function') return value.toDate();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatDate = (value: any, fallback = 'N/A') => toDate(value)?.toLocaleDateString() || fallback;
+const formatTime = (value: any, fallback = '') => toDate(value)?.toLocaleTimeString() || fallback;
+
 export const Servers = () => {
   const { currentOrgId, currentProjectId, setProject, user } = useAppStore();
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newServerName, setNewServerName] = useState('');
+  const [serverHostname, setServerHostname] = useState('');
+  const [serverOs, setServerOs] = useState('');
+  const [serverEnvironment, setServerEnvironment] = useState<'prod' | 'staging' | 'dev'>('prod');
   const [tags, setTags] = useState<{ key: string, value: string }[]>([{ key: '', value: '' }]);
   const [generatedConfig, setGeneratedConfig] = useState<{ id: string, apiKey: string } | null>(null);
   const [selectedServer, setSelectedServer] = useState<Server | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingServerId, setDeletingServerId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [provisionError, setProvisionError] = useState<string | null>(null);
   const [projectIds, setProjectIds] = useState<string[]>([]);
@@ -122,7 +138,10 @@ export const Servers = () => {
       const unsubscribe = onSnapshot(chunkQuery, (snapshot) => {
         const currentChunkMap = new Map<string, Server>();
         snapshot.docs.forEach((serverDoc) => {
-          currentChunkMap.set(serverDoc.id, { id: serverDoc.id, ...serverDoc.data() } as Server);
+          const server = { id: serverDoc.id, ...serverDoc.data() } as Server;
+          if (isActiveServer(server)) {
+            currentChunkMap.set(serverDoc.id, server);
+          }
         });
         chunkServerMaps.set(chunkKey, currentChunkMap);
 
@@ -177,16 +196,18 @@ export const Servers = () => {
       }
       return acc;
     }, {} as Record<string, string>);
-
     const serverRef = doc(db, 'servers', serverId);
     const newServer: Server = {
       id: serverId,
       projectId: effectiveProjectId,
-      name: newServerName,
+      name: newServerName.trim(),
       apiKeyHash,
       apiKeyStatus: 'active',
       status: 'offline',
       createdAt: serverTimestamp(),
+      environment: serverEnvironment,
+      hostname: serverHostname.trim() || newServerName.trim(),
+      os: serverOs.trim() || 'Unknown',
       tags: tagsObject
     };
 
@@ -217,6 +238,9 @@ export const Servers = () => {
       });
       setGeneratedConfig({ id: serverId, apiKey });
       setNewServerName('');
+      setServerHostname('');
+      setServerOs('');
+      setServerEnvironment('prod');
       setTags([{ key: '', value: '' }]);
     } catch (error) {
       setProvisionError('Failed to provision node. Verify project access and try again.');
@@ -233,24 +257,38 @@ export const Servers = () => {
   };
 
   const handleDeleteServer = async (serverId: string) => {
-    await setDoc(doc(db, 'servers', serverId), {
-      status: 'offline',
-      apiKeyStatus: 'revoked',
-      deletedAt: serverTimestamp(),
-    }, { merge: true });
-    await setDoc(doc(db, `servers/${serverId}/audit_logs`, crypto.randomUUID()), {
-      event: 'api_key_revoked',
-      serverId,
-      createdAt: serverTimestamp(),
-    });
-    await writeAuditLog({
-      orgId: currentOrgId,
-      projectId: currentProjectId,
-      userId: user?.uid,
-      action: 'server_removed',
-      resource: 'server',
-      resourceId: serverId,
-    });
+    setDeleteError(null);
+    setDeletingServerId(serverId);
+    try {
+      await setDoc(doc(db, 'servers', serverId), {
+        status: 'offline',
+        apiKeyStatus: 'revoked',
+        apiKeyRevokedAt: serverTimestamp(),
+        deletedAt: serverTimestamp(),
+      }, { merge: true });
+      await setDoc(doc(db, `servers/${serverId}/audit_logs`, crypto.randomUUID()), {
+        event: 'api_key_revoked',
+        serverId,
+        createdAt: serverTimestamp(),
+      });
+      await writeAuditLog({
+        orgId: currentOrgId,
+        projectId: currentProjectId,
+        userId: user?.uid,
+        action: 'server_removed',
+        resource: 'server',
+        resourceId: serverId,
+      });
+      setServers((prev) => prev.filter((server) => server.id !== serverId));
+      setSelectedServer(null);
+      setShowDeleteConfirm(false);
+    } catch (error) {
+      console.error('Failed to terminate node', error);
+      setDeleteError('Could not terminate this node. Check your project role and Firestore rules.');
+      handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}`);
+    } finally {
+      setDeletingServerId(null);
+    }
   };
 
   const handleUpdatePublicStatus = async (serverId: string, updates: Partial<Server>) => {
@@ -339,7 +377,7 @@ export const Servers = () => {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-[2.5rem] p-10 shadow-2xl overflow-hidden"
+              className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-[2.5rem] p-10 shadow-2xl"
             >
               {/* Decorative elements */}
               <div className="absolute -top-24 -right-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
@@ -370,6 +408,55 @@ export const Servers = () => {
                           onChange={(e) => setNewServerName(e.target.value)}
                           className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-2xl pl-14 pr-6 py-4 text-zinc-900 dark:text-white font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all placeholder:text-zinc-300 dark:placeholder:text-zinc-800"
                         />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">Hostname</label>
+                        <input
+                          type="text"
+                          placeholder="api-01.internal"
+                          value={serverHostname}
+                          onChange={(e) => setServerHostname(e.target.value)}
+                          className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-xl px-4 py-3 text-xs font-bold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/10 transition-all"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">Operating System</label>
+                        <input
+                          type="text"
+                          placeholder="Ubuntu 24.04"
+                          value={serverOs}
+                          onChange={(e) => setServerOs(e.target.value)}
+                          className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-xl px-4 py-3 text-xs font-bold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/10 transition-all"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400">Environment</label>
+                        <select
+                          value={serverEnvironment}
+                          onChange={(e) => setServerEnvironment(e.target.value as 'prod' | 'staging' | 'dev')}
+                          className="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-xl px-4 py-3 text-xs font-bold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/10 transition-all"
+                        >
+                          <option value="prod">Production</option>
+                          <option value="staging">Staging</option>
+                          <option value="dev">Development</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5">
+                      <div className="flex items-start gap-4">
+                        <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500">
+                          <Activity className="h-5 w-5" />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-600 dark:text-emerald-400">Live telemetry only</p>
+                          <p className="text-sm font-semibold leading-6 text-zinc-600 dark:text-zinc-300">
+                            CPU, memory, network, disk, uptime, processes, ports, and services are collected by the Nexo Agent and streamed through the metrics API. This node will remain offline until its first real telemetry heartbeat is received.
+                          </p>
+                        </div>
                       </div>
                     </div>
 
@@ -679,10 +766,10 @@ collectAndSend();`;
                           <Clock className="w-4 h-4 text-zinc-400" />
                         </div>
                         <p className="text-lg font-black text-zinc-900 dark:text-white tracking-tight">
-                          {selectedServer.createdAt ? new Date(selectedServer.createdAt.toDate()).toLocaleDateString() : 'N/A'}
+                          {formatDate(selectedServer.createdAt)}
                         </p>
                         <p className="text-xs font-bold text-zinc-500">
-                          {selectedServer.createdAt ? new Date(selectedServer.createdAt.toDate()).toLocaleTimeString() : ''}
+                          {formatTime(selectedServer.createdAt)}
                         </p>
                       </div>
                       <div className="bg-zinc-50 dark:bg-zinc-950/50 rounded-3xl p-6 border border-zinc-200 dark:border-white/5 space-y-4">
@@ -691,7 +778,7 @@ collectAndSend();`;
                           <Activity className="w-4 h-4 text-emerald-500" />
                         </div>
                         <p className="text-lg font-black text-zinc-900 dark:text-white tracking-tight">
-                          {selectedServer.lastSeen ? new Date(selectedServer.lastSeen.toDate()).toLocaleTimeString() : 'Never'}
+                          {formatTime(selectedServer.lastSeen, 'Never')}
                         </p>
                         <p className="text-xs font-bold text-zinc-500">
                           {selectedServer.status === 'online' ? 'Active Stream' : 'Connection Lost'}
@@ -748,7 +835,10 @@ collectAndSend();`;
                       <div className="pt-8 border-t border-zinc-200 dark:border-white/5">
                         {!showDeleteConfirm ? (
                           <button 
-                            onClick={() => setShowDeleteConfirm(true)}
+                            onClick={() => {
+                              setDeleteError(null);
+                              setShowDeleteConfirm(true);
+                            }}
                             className="w-full py-4 bg-red-500/5 border border-red-500/10 text-red-500 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] hover:bg-red-500 hover:text-white transition-all shadow-lg shadow-red-500/5"
                           >
                             Terminate Node
@@ -760,19 +850,24 @@ collectAndSend();`;
                                 This revokes the ingestion key and marks the node offline. Historical alerts and incidents are retained.
                               </p>
                             </div>
+                            {deleteError && (
+                              <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-[10px] font-black text-red-500 uppercase tracking-widest text-center">
+                                {deleteError}
+                              </div>
+                            )}
                             <div className="flex gap-3">
                               <button 
-                                onClick={() => {
-                                  handleDeleteServer(selectedServer.id);
-                                  setSelectedServer(null);
-                                  setShowDeleteConfirm(false);
-                                }}
-                                className="flex-1 py-3 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
+                                onClick={() => void handleDeleteServer(selectedServer.id)}
+                                disabled={deletingServerId === selectedServer.id}
+                                className="flex-1 py-3 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-600 transition-all shadow-lg shadow-red-500/20 disabled:opacity-50"
                               >
-                                Confirm
+                                {deletingServerId === selectedServer.id ? 'Terminating...' : 'Confirm'}
                               </button>
                               <button 
-                                onClick={() => setShowDeleteConfirm(false)}
+                                onClick={() => {
+                                  setDeleteError(null);
+                                  setShowDeleteConfirm(false);
+                                }}
                                 className="flex-1 py-3 bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-all"
                               >
                                 Cancel
@@ -886,67 +981,130 @@ const Gauge = ({ value, label, color, icon: Icon }: { value: number, label: stri
   );
 };
 
-const ServerCard = ({ server, onDelete, onSelect }: { server: Server, onDelete: () => void, onSelect: () => void }) => {
+const ServerCard = ({
+  server,
+  onDelete,
+  onSelect
+}: {
+  server: Server;
+  onDelete: () => void;
+  onSelect: () => void;
+}) => {
   const [metrics, setMetrics] = useState<ServerMetric[]>([]);
 
   useEffect(() => {
-    const metricsQuery = query(collection(db, `servers/${server.id}/metrics`));
+    const metricsQuery = query(
+      collection(db, `servers/${server.id}/metrics`)
+    );
 
-    const unsubscribe = onSnapshot(metricsQuery, (snapshot) => {
-      const sorted = snapshot.docs
-        .map(d => d.data() as ServerMetric)
-        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      setMetrics(sorted.slice(-20));
-    }, (error) => {
-      console.error(`Metrics stream failed for server ${server.id}:`, error);
-      setMetrics([]);
-    });
+    const unsubscribe = onSnapshot(
+      metricsQuery,
+      snapshot => {
+        const sorted = snapshot.docs
+          .map(d => d.data() as ServerMetric)
+          .sort(
+            (a, b) =>
+              new Date(a.timestamp).getTime() -
+              new Date(b.timestamp).getTime()
+          );
+
+        setMetrics(sorted.slice(-20));
+      },
+      error => {
+        console.error(
+          `Metrics stream failed for server ${server.id}:`,
+          error
+        );
+
+        setMetrics([]);
+      }
+    );
 
     return () => unsubscribe();
   }, [server.id]);
 
   const latestMetric = metrics[metrics.length - 1];
-  const isOnline = server.status === 'online' && 
-    server.lastSeen && 
-    (new Date().getTime() - server.lastSeen.toDate().getTime() < 15000);
+
+  const lastSeenAt = toDate(server.lastSeen);
+
+  const isOnline = Boolean(
+    server.status === 'online' &&
+      lastSeenAt &&
+      Date.now() - lastSeenAt.getTime() < 15000
+  );
+
+  const cpu = Number(latestMetric?.cpu || 0);
+  const memory = Number(latestMetric?.memory || 0);
+  const network = Number(latestMetric?.network || 0);
+
+  const formattedNetwork = network.toFixed(2);
 
   return (
-    <motion.div 
+    <motion.div
       layout
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -4 }}
+      initial={{
+        opacity: 0,
+        y: 20
+      }}
+      animate={{
+        opacity: 1,
+        y: 0
+      }}
+      whileHover={{
+        y: -4
+      }}
       onClick={onSelect}
       className="bg-white dark:bg-zinc-900/40 border border-zinc-200 dark:border-white/5 rounded-[2.5rem] p-8 hover:border-emerald-500/30 transition-all group shadow-sm dark:shadow-none cursor-pointer flex flex-col h-full relative overflow-hidden backdrop-blur-sm"
     >
-      {/* Background Glow */}
-      <div className={cn(
-        "absolute -right-20 -top-20 w-64 h-64 rounded-full blur-[100px] opacity-0 group-hover:opacity-10 transition-opacity duration-700 pointer-events-none",
-        isOnline ? "bg-emerald-500" : "bg-zinc-500"
-      )} />
+      <div
+        className={cn(
+          'absolute -right-20 -top-20 w-64 h-64 rounded-full blur-[100px] opacity-0 group-hover:opacity-10 transition-opacity duration-700 pointer-events-none',
+          isOnline ? 'bg-emerald-500' : 'bg-zinc-500'
+        )}
+      />
 
       <div className="flex items-start justify-between mb-8 relative z-10">
         <div className="flex items-center gap-4">
-          <div className={cn(
-            "w-16 h-16 rounded-[1.5rem] flex items-center justify-center border transition-all duration-700",
-            isOnline 
-              ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.15)]" 
-              : "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-white/5 text-zinc-400 dark:text-zinc-500"
-          )}>
-            <ServerIcon className={cn("w-8 h-8", isOnline && "animate-pulse")} />
+          <div
+            className={cn(
+              'w-16 h-16 rounded-[1.5rem] flex items-center justify-center border transition-all duration-700',
+              isOnline
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.15)]'
+                : 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-white/5 text-zinc-400 dark:text-zinc-500'
+            )}
+          >
+            <ServerIcon
+              className={cn(
+                'w-8 h-8',
+                isOnline && 'animate-pulse'
+              )}
+            />
           </div>
+
           <div className="space-y-1">
-            <h3 className="font-black text-zinc-900 dark:text-white group-hover:text-emerald-500 transition-colors text-xl tracking-tight leading-none">{server.name}</h3>
+            <h3 className="font-black text-zinc-900 dark:text-white group-hover:text-emerald-500 transition-colors text-xl tracking-tight leading-none">
+              {server.name}
+            </h3>
+
             <div className="flex items-center gap-2">
-              <div className={cn("w-2 h-2 rounded-full", isOnline ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" : "bg-zinc-400 dark:bg-zinc-600")} />
+              <div
+                className={cn(
+                  'w-2 h-2 rounded-full',
+                  isOnline
+                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                    : 'bg-zinc-400 dark:bg-zinc-600'
+                )}
+              />
+
               <span className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">
                 {isOnline ? 'Active' : 'Offline'}
               </span>
             </div>
           </div>
         </div>
-        <button 
-          onClick={(e) => {
+
+        <button
+          onClick={e => {
             e.stopPropagation();
             onDelete();
           }}
@@ -956,32 +1114,45 @@ const ServerCard = ({ server, onDelete, onSelect }: { server: Server, onDelete: 
         </button>
       </div>
 
-      {/* Prominent Tags */}
-      {server.tags && Object.entries(server.tags).length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-10 relative z-10">
-          {Object.entries(server.tags).map(([key, value]) => (
-            <div key={key} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-50 dark:bg-white/5 border border-zinc-200 dark:border-white/10 rounded-xl shadow-sm">
-              <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{key}</span>
-              <div className="w-px h-3 bg-zinc-200 dark:bg-white/10" />
-              <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">{value}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {server.tags &&
+        Object.entries(server.tags).length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-10 relative z-10">
+            {Object.entries(server.tags).map(
+              ([key, value]) => (
+                <div
+                  key={key}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-zinc-50 dark:bg-white/5 border border-zinc-200 dark:border-white/10 rounded-xl shadow-sm"
+                >
+                  <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">
+                    {key}
+                  </span>
+
+                  <div className="w-px h-3 bg-zinc-200 dark:bg-white/10" />
+
+                  <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
+                    {String(value)}
+                  </span>
+                </div>
+              )
+            )}
+          </div>
+        )}
 
       <div className="space-y-10 flex-1 relative z-10">
         <div className="flex items-center justify-center gap-10 py-2">
-          <Gauge 
-            value={isOnline ? (latestMetric?.cpu || 0) : 0} 
-            label="CPU Load" 
-            color="#10b981" 
+          <Gauge
+            value={isOnline ? cpu : 0}
+            label="CPU Load"
+            color="#10b981"
             icon={Activity}
           />
+
           <div className="w-px h-12 bg-zinc-200 dark:bg-white/10" />
-          <Gauge 
-            value={isOnline ? (latestMetric?.memory || 0) : 0} 
-            label="Memory" 
-            color="#3b82f6" 
+
+          <Gauge
+            value={isOnline ? memory : 0}
+            label="Memory"
+            color="#3b82f6"
             icon={Shield}
           />
         </div>
@@ -989,10 +1160,16 @@ const ServerCard = ({ server, onDelete, onSelect }: { server: Server, onDelete: 
         <div className="flex items-center justify-between p-5 bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-100 dark:border-white/5 rounded-2xl">
           <div className="flex items-center gap-3">
             <div className="w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]" />
-            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Network Throughput</span>
+
+            <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+              Network Throughput
+            </span>
           </div>
+
           <span className="text-sm font-black text-zinc-900 dark:text-white tracking-tight">
-            {isOnline ? `${latestMetric?.network.toFixed(1)} MB/s` : '--'}
+            {isOnline
+              ? `${formattedNetwork} MB/s`
+              : '--'}
           </span>
         </div>
       </div>
@@ -1000,19 +1177,23 @@ const ServerCard = ({ server, onDelete, onSelect }: { server: Server, onDelete: 
       <div className="mt-10 pt-6 border-t border-zinc-100 dark:border-white/5 flex items-center justify-between relative z-10">
         <div className="flex items-center gap-2 text-zinc-400">
           <Clock className="w-3.5 h-3.5" />
+
           <span className="text-[10px] font-bold uppercase tracking-widest">
-            {server.lastSeen ? `Seen ${new Date(server.lastSeen.toDate()).toLocaleTimeString()}` : 'Never seen'}
+            {lastSeenAt
+              ? `Seen ${lastSeenAt.toLocaleTimeString()}`
+              : 'Never seen'}
           </span>
         </div>
+
         <div className="flex items-center gap-2 text-emerald-500 text-[10px] font-black uppercase tracking-[0.2em] opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
           Inspect
+
           <ChevronRight className="w-4 h-4" />
         </div>
       </div>
     </motion.div>
   );
 };
-
 
 const MetricMiniCard = ({ label, value }: { label: string, value: string }) => (
   <div className="bg-zinc-50 dark:bg-zinc-950/50 border border-zinc-200 dark:border-white/5 rounded-lg p-2 text-center">

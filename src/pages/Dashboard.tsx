@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { collection, query, orderBy, limit, onSnapshot, db, where, handleFirestoreError, OperationType } from '../firebase';
 import { Metric, Alert, Server as ServerType, ServerMetric } from '../types';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { motion } from 'framer-motion';
 import { InviteModal } from '../components/InviteModal';
 import { useAppStore } from '../store';
@@ -44,7 +44,9 @@ export const Dashboard = () => {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const serverList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ServerType));
+      const serverList = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as ServerType))
+        .filter(isActiveServer);
       setServers(serverList);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'servers');
@@ -262,7 +264,7 @@ export const Dashboard = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 items-stretch">
         <StatCard 
           title="Network Throughput" 
-          value={hasMetricData ? `${avgThroughput.toFixed(1)}` : '—'}
+          value={hasMetricData ? `${avgThroughput.toFixed(2)}` : '—'}
           unit="MB/s"
           data={netData}
           trend={throughputTrend}

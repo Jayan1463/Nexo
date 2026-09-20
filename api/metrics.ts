@@ -1,6 +1,7 @@
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import crypto from "crypto";
+import { existsSync, readFileSync } from "fs";
 
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "nexocloud-software";
 const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || "(default)";
@@ -9,7 +10,8 @@ function parseServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
+    const serviceAccountJson = existsSync(raw) ? readFileSync(raw, "utf8") : raw;
+    const parsed = JSON.parse(serviceAccountJson);
     if (typeof parsed.private_key === "string") {
       parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
     }

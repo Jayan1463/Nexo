@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldAlert, TrendingUp, EyeOff, ClipboardCheck } from 'lucide-react';
 import { collection, db, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where, limit } from '../firebase';
 import { RiskInsight, Server, ServerMetric } from '../types';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { useAppStore } from '../store';
 
 export const RiskAnalysis = () => {
@@ -15,7 +15,7 @@ export const RiskAnalysis = () => {
     if (!currentProjectId) return;
     const serverQuery = query(collection(db, 'servers'), where('projectId', '==', currentProjectId));
     return onSnapshot(serverQuery, (snapshot) => {
-      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server)));
+      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server)).filter(isActiveServer));
       setErrorMessage('');
     }, (error) => {
       console.error('Failed to load risk servers', error);

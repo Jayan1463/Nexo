@@ -4,7 +4,7 @@ import { collection, db, doc, onSnapshot, query, serverTimestamp, setDoc, where 
 import { Server } from '../types';
 import { useAppStore } from '../store';
 import { writeAuditLog } from '../lib/audit';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 
 async function sha256Hex(input: string) {
   const data = new TextEncoder().encode(input);
@@ -34,7 +34,7 @@ export const ApiKeys = () => {
     }
     const serversQuery = query(collection(db, 'servers'), where('projectId', '==', currentProjectId));
     return onSnapshot(serversQuery, (snapshot) => {
-      const rows = snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server));
+      const rows = snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server)).filter(isActiveServer);
       setServers(rows);
       if (!selectedServerId && rows[0]) setSelectedServerId(rows[0].id);
       if (selectedServerId && !rows.some((server) => server.id === selectedServerId)) setSelectedServerId(rows[0]?.id || '');

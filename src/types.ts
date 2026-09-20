@@ -89,6 +89,9 @@ export interface Server {
   createdAt: any;
   tags?: Record<string, string>;
   environment?: 'prod' | 'staging' | 'dev';
+  hostname?: string;
+  os?: string;
+  description?: string;
   publicStatusEnabled?: boolean;
   publicName?: string;
 }

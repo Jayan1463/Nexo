@@ -3,6 +3,7 @@ import { FileBarChart, Download } from 'lucide-react';
 import { collection, db, onSnapshot, query, where } from '../firebase';
 import { Alert, Incident, RiskInsight, Server } from '../types';
 import { useAppStore } from '../store';
+import { isActiveServer } from '../lib/utils';
 
 export const Reports = () => {
   const { currentProjectId } = useAppStore();
@@ -20,7 +21,7 @@ export const Reports = () => {
       setErrorMessage('Some report data could not be loaded for this account.');
     };
     const unsubServers = onSnapshot(query(collection(db, 'servers'), where('projectId', '==', currentProjectId)), (snapshot) => {
-      setServers(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Server)));
+      setServers(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Server)).filter(isActiveServer));
       setErrorMessage('');
     }, onError('servers'));
     const unsubAlerts = onSnapshot(collection(db, `projects/${currentProjectId}/alerts`), (snapshot) => setAlerts(snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as Alert))), onError('alerts'));

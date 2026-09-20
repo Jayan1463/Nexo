@@ -14,7 +14,11 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: 'VITE_ENABLE_E2E_AUTH=true npm run dev',
+    command: 'npm run dev',
+    env: {
+      ...process.env,
+      VITE_ENABLE_E2E_AUTH: 'true',
+    },
     url: 'http://127.0.0.1:3000/api/health',
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,

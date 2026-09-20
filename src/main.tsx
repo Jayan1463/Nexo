@@ -5,6 +5,9 @@ import './index.css';
 
 document.title = 'Nexo Cloud';
 
+localStorage.removeItem('nexo:current-org-id');
+localStorage.removeItem('nexo:current-project-id');
+
 const savedTheme = localStorage.getItem('theme');
 if (savedTheme === 'dark') {
   document.documentElement.classList.add('dark');

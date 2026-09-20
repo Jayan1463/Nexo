@@ -23,7 +23,7 @@ import {
 } from '../firebase';
 import { useAppStore } from '../store';
 import { Organization, Project } from '../types';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export const TopBar = ({
@@ -125,7 +125,11 @@ export const TopBar = ({
   }, [currentOrgId, currentProjectId, setProject]);
 
   useEffect(() => {
-    if (!currentProjectId) return;
+    if (!currentProjectId || (!searchFocused && !searchTerm.trim())) {
+      setSearchRows([]);
+      return;
+    }
+
     const rows: Array<{ type: string; title: string; subtitle: string }> = [];
     const pushAndFilter = () => {
       const term = searchTerm.trim().toLowerCase();
@@ -139,6 +143,7 @@ export const TopBar = ({
       rows.splice(0, rows.length, ...rows.filter((row) => row.type !== 'Server'));
       snapshot.docs.forEach((serverDoc) => {
         const data = serverDoc.data() as any;
+        if (!isActiveServer(data)) return;
         rows.push({ type: 'Server', title: data.name || serverDoc.id, subtitle: data.status || 'unknown' });
       });
       pushAndFilter();
@@ -176,7 +181,11 @@ export const TopBar = ({
   }, [currentProjectId, searchTerm]);
 
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || !showNotifications) {
+      if (!showNotifications) setNotifications([]);
+      return;
+    }
+
     const notificationQuery = query(collection(db, 'notifications'), where('recipientUserId', '==', user.uid), orderBy('createdAt', 'desc'), limit(10));
     return onSnapshot(notificationQuery, (snapshot) => {
       setNotifications(snapshot.docs.map((notificationDoc) => ({ id: notificationDoc.id, ...notificationDoc.data() })));
@@ -184,7 +193,7 @@ export const TopBar = ({
       console.error('Notifications listener failed', error);
       setNotifications([]);
     });
-  }, [user?.uid]);
+  }, [showNotifications, user?.uid]);
 
   const currentOrg = orgs.find(o => o.id === currentOrgId);
   const currentProject = projects.find(p => p.id === currentProjectId);

@@ -3,7 +3,7 @@ import { Users, Mail, Shield, UserMinus, Server } from 'lucide-react';
 import { collection, db, deleteDoc, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from '../firebase';
 import { useAppStore } from '../store';
 import { OrgMember, Server as ServerType, UserProfile } from '../types';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { writeAuditLog } from '../lib/audit';
 
 type MemberRow = UserProfile & { role: string; serverScope?: string[]; lastActivity?: any };
@@ -57,7 +57,7 @@ export const Team = () => {
     }
     const serversQuery = query(collection(db, 'servers'), where('projectId', '==', currentProjectId));
     return onSnapshot(serversQuery, (snapshot) => {
-      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as ServerType)));
+      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as ServerType)).filter(isActiveServer));
     }, (error) => {
       console.error('Failed to load team server scope', error);
       setServers([]);

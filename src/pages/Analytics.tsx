@@ -10,7 +10,7 @@ import {
   Server
 } from 'lucide-react';
 import { MetricChart } from '../components/MetricChart';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { collection, query, orderBy, limit, onSnapshot, db, where, handleFirestoreError, OperationType } from '../firebase';
 import { Server as ServerType, ServerMetric } from '../types';
 import { useAppStore } from '../store';
@@ -21,6 +21,7 @@ export const Analytics = () => {
   const [cpuData, setCpuData] = useState<any[]>([]);
   const [memData, setMemData] = useState<any[]>([]);
   const [netData, setNetData] = useState<any[]>([]);
+  const [diskData, setDiskData] = useState<any[]>([]);
   const [servers, setServers] = useState<ServerType[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>('');
   const [isExporting, setIsExporting] = useState(false);
@@ -46,7 +47,9 @@ export const Analytics = () => {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const serverList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ServerType));
+      const serverList = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as ServerType))
+        .filter(isActiveServer);
       setServers(serverList);
       setSelectedServerId((prev) => {
         if (serverList.length === 0) return '';
@@ -62,7 +65,13 @@ export const Analytics = () => {
 
   // Fetch metrics with selectable time window
   useEffect(() => {
-    if (!selectedServerId) return;
+    if (!selectedServerId) {
+      setCpuData([]);
+      setMemData([]);
+      setNetData([]);
+      setDiskData([]);
+      return;
+    }
 
     const q = query(
       collection(db, `servers/${selectedServerId}/metrics`),
@@ -103,8 +112,16 @@ export const Analytics = () => {
         timestamp: typeof m.timestamp === 'string' ? new Date(m.timestamp) : (m.timestamp as any).toDate(), 
         value: m.network 
       })));
+      setDiskData(metrics.map(m => ({
+        timestamp: typeof m.timestamp === 'string' ? new Date(m.timestamp) : (m.timestamp as any).toDate(),
+        value: m.disk || 0
+      })));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, `servers/${selectedServerId}/metrics`);
+      setCpuData([]);
+      setMemData([]);
+      setNetData([]);
+      setDiskData([]);
     });
 
     return () => unsubscribe();
@@ -156,10 +173,11 @@ export const Analytics = () => {
           cpuPoint.value ?? '',
           memData[idx]?.value ?? '',
           netData[idx]?.value ?? '',
+          diskData[idx]?.value ?? '',
         ];
       });
       const csv = [
-        ['timestamp', 'cpu', 'memory', 'network'].join(','),
+        ['timestamp', 'cpu', 'memory', 'network', 'disk'].join(','),
         ...rows.map((row) => row.join(',')),
       ].join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -333,7 +351,7 @@ export const Analytics = () => {
             </motion.div>
             <motion.div variants={item}>
               <MetricChart 
-                data={cpuData} 
+                data={diskData} 
                 type="disk" 
                 title="Disk I/O Performance" 
                 color="#f59e0b" 

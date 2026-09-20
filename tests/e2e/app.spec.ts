@@ -76,7 +76,7 @@ test.describe('Nexo Cloud authenticated dashboard shell', () => {
     });
   });
 
-  test('owner dashboard loads without demo navigation and key modules are reachable', async ({ page }) => {
+  test('owner dashboard loads without demo navigation and key modules are reachable', async ({ page }, testInfo) => {
     await page.goto('/');
 
     await expect(page.getByText('Nexo Cloud').first()).toBeVisible();
@@ -92,6 +92,9 @@ test.describe('Nexo Cloud authenticated dashboard shell', () => {
     ];
 
     for (const module of modules) {
+      if (testInfo.project.name.includes('mobile')) {
+        await page.getByRole('button', { name: 'Open navigation menu' }).click();
+      }
       await page.getByRole('button', { name: module.nav }).click();
       await expect(page.getByRole('heading', { name: module.heading })).toBeVisible();
       await expect(page.getByText('Demo Data')).toHaveCount(0);
@@ -99,7 +102,9 @@ test.describe('Nexo Cloud authenticated dashboard shell', () => {
     }
   });
 
-  test('global search focus shortcut is available after login', async ({ page }) => {
+  test('global search focus shortcut is available after login', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Global search is hidden on mobile viewports.');
+
     await page.goto('/');
 
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');

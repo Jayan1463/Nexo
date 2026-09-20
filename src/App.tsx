@@ -52,10 +52,50 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { AppRole, canAccessTab } from './lib/rbac';
 import { FirebaseError } from 'firebase/app';
+import { User } from 'firebase/auth';
 
 const makeInviteCode = () => crypto.randomUUID().replace(/-/g, '').slice(0, 20).toUpperCase();
 
 const E2E_AUTH_STORAGE_KEY = 'nexo:e2e-auth';
+
+const getUserProfilePayload = (firebaseUser: User) => {
+  if (!firebaseUser.email) {
+    throw new Error('Your account is missing an email address. Please sign in with an email-enabled provider.');
+  }
+
+  return {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    displayName: firebaseUser.displayName || '',
+    photoURL: firebaseUser.photoURL || '',
+  };
+};
+
+const createOwnedWorkspace = async (firebaseUser: User) => {
+  const orgRef = doc(collection(db, 'organizations'));
+  const orgId = orgRef.id;
+  const inviteCode = makeInviteCode();
+
+  await setDoc(orgRef, {
+    id: orgId,
+    name: `${firebaseUser.displayName || 'My'}'s Organization`,
+    ownerId: firebaseUser.uid,
+    inviteCode,
+    plan: 'free',
+    createdAt: serverTimestamp(),
+  });
+
+  await setDoc(doc(db, `organizations/${orgId}/members`, firebaseUser.uid), {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email || '',
+    displayName: firebaseUser.displayName || '',
+    photoURL: firebaseUser.photoURL || '',
+    role: 'owner',
+    joinedAt: serverTimestamp(),
+  });
+
+  return orgId;
+};
 
 function getE2EUser() {
   const enabled = import.meta.env.DEV && import.meta.env.VITE_ENABLE_E2E_AUTH === 'true';
@@ -117,10 +157,12 @@ class RouteErrorBoundary extends React.Component<
 }
 
 export default function App() {
-  const { user, setUser, currentOrgId, setOrg, setProject, theme, isSidebarCollapsed } = useAppStore();
+  const { user, setUser, currentOrgId, currentProjectId, setOrg, setProject, theme, isSidebarCollapsed } = useAppStore();
   const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'dashboard');
   const [userRole, setUserRole] = useState<AppRole>('viewer');
   const [loading, setLoading] = useState(true);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
   const inviteHandledRef = useRef(false);
 
   useEffect(() => {
@@ -145,220 +187,133 @@ export default function App() {
       return () => undefined;
     }
 
-    const generateUniqueInviteCode = async () => {
-      // New users cannot enumerate organizations under membership-based rules.
-      return makeInviteCode();
-    };
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      try {
+      setAuthError('');
+
       if (firebaseUser) {
+        setOrg(null);
+        setProject(null);
         setUser(firebaseUser);
+        setWorkspaceLoading(true);
         setLoading(false);
 
-        // Sync user to Firestore
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const userSnap = await getDoc(userRef);
-        let orgId = '';
-        
-        if (!userSnap.exists()) {
-          // Create default organization for new user
-          const orgRef = doc(collection(db, 'organizations'));
-          orgId = orgRef.id;
-          
-          try {
-            const inviteCode = await generateUniqueInviteCode();
-            await setDoc(orgRef, {
-              id: orgId,
-              name: `${firebaseUser.displayName || 'My'}'s Organization`,
-              ownerId: firebaseUser.uid,
-              inviteCode,
-              plan: 'free',
-              createdAt: serverTimestamp(),
-            });
-
-            // Create member document
-            const memberRef = doc(db, `organizations/${orgId}/members`, firebaseUser.uid);
-            await setDoc(memberRef, {
-              uid: firebaseUser.uid,
-              role: 'owner',
-              joinedAt: serverTimestamp(),
-            });
-
-            await setDoc(userRef, {
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName,
-              photoURL: firebaseUser.photoURL,
-              role: 'owner',
-              currentOrgId: orgId,
-              orgIds: [orgId],
-              createdAt: serverTimestamp(),
-            });
-          } catch (error) {
-            handleFirestoreError(error, OperationType.WRITE, 'organizations/users/members');
-          }
-        } else {
-          const userData = userSnap.data() as any;
+        const bootstrapAccount = async () => {
+          const profile = getUserProfilePayload(firebaseUser);
+          const userRef = doc(db, 'users', firebaseUser.uid);
+          const userSnap = await getDoc(userRef);
+          const userData = userSnap.exists() ? userSnap.data() as any : {};
           const userOrgIds = Array.isArray(userData?.orgIds)
             ? userData.orgIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
             : [];
-          orgId = (typeof userData?.currentOrgId === 'string' && userData.currentOrgId.length > 0)
+          let orgId = (typeof userData?.currentOrgId === 'string' && userData.currentOrgId.length > 0)
             ? userData.currentOrgId
             : (userOrgIds[0] || '');
 
-          if (orgId) {
-            const existingOrgSnap = await getDoc(doc(db, 'organizations', orgId));
-            if (!existingOrgSnap.exists()) {
-              orgId = '';
-            }
-          }
-          
-          // If user doesn't have an orgId for some reason, find one or create one
           if (!orgId) {
-            try {
-              const orgsQuery = query(collection(db, 'organizations'), where('ownerId', '==', firebaseUser.uid));
-              const orgsSnap = await getDocs(orgsQuery);
-              if (!orgsSnap.empty) {
-                orgId = orgsSnap.docs[0].id;
-                await setDoc(userRef, { currentOrgId: orgId, orgIds: [orgId] }, { merge: true });
-              } else {
-                const orgRef = doc(collection(db, 'organizations'));
-                orgId = orgRef.id;
-                const inviteCode = await generateUniqueInviteCode();
-                await setDoc(orgRef, {
-                  id: orgId,
-                  name: `${firebaseUser.displayName || 'My'}'s Organization`,
-                  ownerId: firebaseUser.uid,
-                  inviteCode,
-                  plan: 'free',
-                  createdAt: serverTimestamp(),
-                });
-                // Create member document
-                const memberRef = doc(db, `organizations/${orgId}/members`, firebaseUser.uid);
-                await setDoc(memberRef, {
-                  uid: firebaseUser.uid,
-                  role: 'owner',
-                  joinedAt: serverTimestamp(),
-                });
-                await setDoc(userRef, { currentOrgId: orgId, orgIds: [orgId] }, { merge: true });
-              }
-            } catch (error) {
-              handleFirestoreError(error, OperationType.WRITE, 'organizations/users');
-            }
+            orgId = await createOwnedWorkspace(firebaseUser);
           }
 
-          if (orgId) {
-            try {
-              const orgSnap = await getDoc(doc(db, 'organizations', orgId));
-              const orgData = orgSnap.exists() ? orgSnap.data() as any : null;
-              const roleForMembership = orgData?.ownerId === firebaseUser.uid ? 'owner' : 'viewer';
-              const memberRef = doc(db, `organizations/${orgId}/members`, firebaseUser.uid);
-              const memberSnap = await getDoc(memberRef);
-              if (!memberSnap.exists()) {
-                await setDoc(memberRef, {
-                  uid: firebaseUser.uid,
-                  role: roleForMembership,
-                  joinedAt: serverTimestamp(),
-                }, { merge: true });
-              }
+          setOrg(orgId);
 
-              const mergedOrgIds = Array.from(
-                new Set([
-                  orgId,
-                  ...userOrgIds,
-                ].filter((id): id is string => typeof id === 'string' && id.length > 0)),
-              );
+          const orgSnap = await getDoc(doc(db, 'organizations', orgId));
+          if (!orgSnap.exists()) {
+            throw new Error('Your workspace could not be loaded. Please try signing in again.');
+          }
 
-              await setDoc(userRef, {
-                uid: firebaseUser.uid,
-                email: firebaseUser.email,
-                displayName: firebaseUser.displayName,
-                photoURL: firebaseUser.photoURL,
-                currentOrgId: orgId,
-                orgIds: mergedOrgIds,
-                updatedAt: serverTimestamp(),
-              }, { merge: true });
-            } catch (error) {
-              handleFirestoreError(error, OperationType.WRITE, 'users/org-membership-repair');
-            }
+          const orgData = orgSnap.data() as any;
+          if (!orgData.inviteCode) {
+            await setDoc(doc(db, 'organizations', orgId), { inviteCode: makeInviteCode() }, { merge: true });
           }
-        }
-        
-        setOrg(orgId);
-        try {
-          const orgRef = doc(db, 'organizations', orgId);
-          const orgSnap = await getDoc(orgRef);
-          if (orgSnap.exists() && !orgSnap.data().inviteCode) {
-            const inviteCode = await generateUniqueInviteCode();
-            await setDoc(orgRef, { inviteCode }, { merge: true });
-          }
-        } catch (error) {
-          handleFirestoreError(error, OperationType.UPDATE, `organizations/${orgId}`);
-        }
 
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
-        if (unsubscribeUserDoc) unsubscribeUserDoc();
-        unsubscribeUserDoc = onSnapshot(userDocRef, async (snap) => {
-          if (!snap.exists()) return;
-          const data = snap.data() as any;
-          const nextOrgId = typeof data?.currentOrgId === 'string' ? data.currentOrgId : useAppStore.getState().currentOrgId;
-          let role = (data?.role || 'viewer') as AppRole;
-          if (nextOrgId) {
-            try {
-              const memberSnap = await getDoc(doc(db, `organizations/${nextOrgId}/members`, firebaseUser.uid));
-              const memberRole = memberSnap.exists() ? memberSnap.data()?.role : null;
-              if (memberRole === 'owner' || memberRole === 'admin' || memberRole === 'developer' || memberRole === 'viewer') {
-                role = memberRole;
-              }
-            } catch (error) {
-              console.error('Failed to load membership role', error);
-            }
+          const memberRef = doc(db, `organizations/${orgId}/members`, firebaseUser.uid);
+          const memberSnap = await getDoc(memberRef);
+          const roleForMembership = orgData.ownerId === firebaseUser.uid ? 'owner' : 'viewer';
+          if (!memberSnap.exists()) {
+            await setDoc(memberRef, {
+              ...profile,
+              role: roleForMembership,
+              joinedAt: serverTimestamp(),
+            }, { merge: true });
           }
-          setUserRole(role);
-          const activeOrgId = useAppStore.getState().currentOrgId;
-          if (data?.currentOrgId && data.currentOrgId !== activeOrgId) {
-            setOrg(data.currentOrgId);
-            setProject(null);
-          }
-        });
 
-        // Initialize first project
-        try {
+          const mergedOrgIds = Array.from(new Set([orgId, ...userOrgIds]));
+          await setDoc(userRef, {
+            ...profile,
+            role: userData?.role || roleForMembership,
+            currentOrgId: orgId,
+            orgIds: mergedOrgIds,
+            createdAt: userData?.createdAt || serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
+
           const projectsQuery = query(collection(db, `organizations/${orgId}/projects`), limit(1));
           const projectsSnap = await getDocs(projectsQuery);
-          if (!projectsSnap.empty) {
-            setProject(projectsSnap.docs[0].id);
-          } else {
-            // Create a default project if none exists
+          let projectId = projectsSnap.empty ? '' : projectsSnap.docs[0].id;
+          if (!projectId) {
             const projectRef = doc(collection(db, `organizations/${orgId}/projects`));
+            projectId = projectRef.id;
             await setDoc(projectRef, {
-              id: projectRef.id,
-              orgId: orgId,
+              id: projectId,
+              orgId,
               name: 'Default Project',
               environment: 'prod',
-              createdAt: serverTimestamp()
+              createdAt: serverTimestamp(),
             });
-            setProject(projectRef.id);
           }
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `organizations/${orgId}/projects`);
-        }
-      } else {
-        setUser(null);
-        setOrg(null);
-        setProject(null);
-        setUserRole('viewer');
-        if (unsubscribeUserDoc) {
-          unsubscribeUserDoc();
-          unsubscribeUserDoc = null;
-        }
+
+          setProject(projectId);
+          setUserRole(roleForMembership);
+
+          const userDocRef = doc(db, 'users', firebaseUser.uid);
+          if (unsubscribeUserDoc) unsubscribeUserDoc();
+          unsubscribeUserDoc = onSnapshot(userDocRef, async (snap) => {
+            if (!snap.exists()) return;
+            const data = snap.data() as any;
+            const nextOrgId = typeof data?.currentOrgId === 'string' ? data.currentOrgId : useAppStore.getState().currentOrgId;
+            let role = (data?.role || roleForMembership) as AppRole;
+            if (nextOrgId) {
+              try {
+                const nextMemberSnap = await getDoc(doc(db, `organizations/${nextOrgId}/members`, firebaseUser.uid));
+                const memberRole = nextMemberSnap.exists() ? nextMemberSnap.data()?.role : null;
+                if (memberRole === 'owner' || memberRole === 'admin' || memberRole === 'developer' || memberRole === 'viewer') {
+                  role = memberRole;
+                }
+              } catch (error) {
+                console.error('Failed to load membership role', error);
+              }
+            }
+            setUserRole(role);
+            const activeOrgId = useAppStore.getState().currentOrgId;
+            if (nextOrgId && nextOrgId !== activeOrgId) {
+              setOrg(nextOrgId);
+              setProject(null);
+            }
+          });
+        };
+
+        bootstrapAccount().catch((error) => {
+          console.error('Auth bootstrap failed', error);
+          setUser(null);
+          setOrg(null);
+          setProject(null);
+          setAuthError(error instanceof Error ? error.message : 'Account setup failed. Please try again.');
+        }).finally(() => {
+          setWorkspaceLoading(false);
+        });
+
+        return;
       }
-      } catch (error) {
-        console.error('Auth bootstrap failed', error);
-        setUser(firebaseUser ?? null);
-      } finally {
-        setLoading(false);
+
+      setUser(null);
+      setOrg(null);
+      setProject(null);
+      setUserRole('viewer');
+      setWorkspaceLoading(false);
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+        unsubscribeUserDoc = null;
       }
+      setLoading(false);
     });
 
     return () => {
@@ -366,7 +321,6 @@ export default function App() {
       if (unsubscribeUserDoc) unsubscribeUserDoc();
     };
   }, [setUser, setOrg, setProject]);
-
   useEffect(() => {
     if (!canAccessTab(userRole, activeTab)) {
       setActiveTab('dashboard');
@@ -448,12 +402,7 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="h-screen w-screen bg-white dark:bg-zinc-950 flex flex-col items-center justify-center gap-4 transition-colors duration-300">
-        <div className="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center animate-pulse">
-          <Zap className="text-zinc-950 w-6 h-6 fill-current" />
-        </div>
-        <p className="text-zinc-500 dark:text-zinc-400 font-mono text-sm tracking-widest animate-pulse">INITIALIZING NEXO CLOUD...</p>
-      </div>
+      <LoadingScreen label="INITIALIZING NEXO CLOUD..." />
     );
   }
 
@@ -462,7 +411,11 @@ export default function App() {
   }
 
   if (!user) {
-    return <LoginPage />;
+    return <LoginPage authError={authError} />;
+  }
+
+  if (workspaceLoading || !currentOrgId || !currentProjectId) {
+    return <LoadingScreen label="LOADING VERIFIED WORKSPACE..." />;
   }
 
   return (
@@ -513,7 +466,16 @@ export default function App() {
   );
 }
 
-const LoginPage = () => {
+const LoadingScreen = ({ label }: { label: string }) => (
+  <div className="h-screen w-screen bg-white dark:bg-zinc-950 flex flex-col items-center justify-center gap-4 transition-colors duration-300">
+    <div className="w-12 h-12 bg-emerald-500 rounded-xl flex items-center justify-center animate-pulse">
+      <Zap className="text-zinc-950 w-6 h-6 fill-current" />
+    </div>
+    <p className="text-zinc-500 dark:text-zinc-400 font-mono text-sm tracking-widest animate-pulse">{label}</p>
+  </div>
+);
+
+const LoginPage = ({ authError = '' }: { authError?: string }) => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -781,9 +743,9 @@ const LoginPage = () => {
               )}
             </form>
 
-            {errorMessage && (
+            {(errorMessage || authError) && (
               <div className="rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-xs text-left">
-                {errorMessage}
+                {errorMessage || authError}
               </div>
             )}
             {infoMessage && (

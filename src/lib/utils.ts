@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function isActiveServer<T extends { deletedAt?: unknown; apiKeyStatus?: string | null }>(server: T) {
+  return !server.deletedAt && server.apiKeyStatus !== 'revoked';
+}
+
 export const formatMetricValue = (value: number, type: string) => {
   if (type === 'cpu') return `${value.toFixed(1)}%`;
   if (type === 'memory') return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;

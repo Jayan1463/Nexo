@@ -14,11 +14,16 @@ interface AppState {
   setSidebarCollapsed: (collapsed: boolean) => void;
 }
 
+const getInitialTheme = (): 'light' | 'dark' => {
+  const savedTheme = localStorage.getItem('theme');
+  return savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : 'light';
+};
+
 export const useAppStore = create<AppState>((set) => ({
   user: null,
   currentOrgId: null,
   currentProjectId: null,
-  theme: (localStorage.getItem('theme') as 'light' | 'dark') || 'dark',
+  theme: getInitialTheme(),
   isSidebarCollapsed: false,
   setUser: (user) => set({ user }),
   setOrg: (currentOrgId) => set({ currentOrgId }),

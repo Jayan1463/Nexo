@@ -26,7 +26,7 @@ import {
   YAxis,
   CartesianGrid
 } from 'recharts';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { collection, query, where, onSnapshot, db, orderBy, limit } from '../firebase';
 import { useAppStore } from '../store';
 import { Server as ServerType, ServerMetric } from '../types';
@@ -57,7 +57,9 @@ export const Cost = () => {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const serverList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ServerType));
+      const serverList = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() } as ServerType))
+        .filter(isActiveServer);
       setServers(serverList);
     });
 

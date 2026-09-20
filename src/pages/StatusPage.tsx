@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Radio, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { collection, db, onSnapshot, orderBy, query, where, limit } from '../firebase';
 import { Incident, Server } from '../types';
-import { cn } from '../lib/utils';
+import { cn, isActiveServer } from '../lib/utils';
 import { useAppStore } from '../store';
 
 export const StatusPage = () => {
@@ -20,7 +20,7 @@ export const StatusPage = () => {
     if (!projectId) return;
     const serverQuery = query(collection(db, 'servers'), where('projectId', '==', projectId), where('publicStatusEnabled', '==', true));
     const unsubServers = onSnapshot(serverQuery, (snapshot) => {
-      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server)));
+      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server)).filter(isActiveServer));
       setServiceErrorMessage('');
     }, (error) => {
       console.error('Failed to load public services', error);
@@ -59,7 +59,7 @@ export const StatusPage = () => {
               <Radio className="w-6 h-6 text-emerald-500" />
             </div>
             <div>
-              <p className="text-xl font-black text-zinc-900 dark:text-white">Nexo Cloud Status</p>
+              <h1 className="text-xl font-black text-zinc-900 dark:text-white">Nexo Cloud Status</h1>
               <p className="text-xs uppercase tracking-widest text-zinc-500 font-bold">Public service view</p>
             </div>
           </div>

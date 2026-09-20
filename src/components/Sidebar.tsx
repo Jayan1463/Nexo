@@ -55,6 +55,8 @@ export const Sidebar = ({ activeTab, setActiveTab, userRole }: { activeTab: stri
       {/* Mobile Menu Toggle */}
       <button 
         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+        aria-expanded={isMobileMenuOpen}
         className="lg:hidden fixed bottom-8 right-8 z-50 w-16 h-16 bg-emerald-500 text-zinc-950 rounded-3xl shadow-[0_20px_50px_rgba(16,185,129,0.3)] flex items-center justify-center hover:bg-emerald-400 transition-all active:scale-90 hover:scale-110"
       >
         <Menu className="w-7 h-7" />
