@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Mail, Shield, Loader2, Check } from 'lucide-react';
 import { useAppStore } from '../store';
 import { cn } from '../lib/utils';
+import { auth } from '../firebase';
 
 export const InviteModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
   const { user, currentOrgId } = useAppStore();
@@ -18,9 +19,11 @@ export const InviteModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () 
     setLoading(true);
     setErrorMessage('');
     try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Please sign in again.');
       const response = await fetch('/api/invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           email,
           orgId: currentOrgId,

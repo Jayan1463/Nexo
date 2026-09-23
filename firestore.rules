@@ -79,6 +79,7 @@ service cloud.firestore {
 
     function isProjectInUserOrg(projectId) {
       return isAuthenticated() &&
+        isOrgMember(userOrgId()) &&
         exists(/databases/$(database)/documents/organizations/$(userOrgId())/projects/$(projectId));
     }
 
@@ -153,7 +154,7 @@ service cloud.firestore {
 
     match /organizations/{orgId}/members/{uid} {
       allow read: if isOrgMember(orgId) || isAdmin() || isOrgOwner(orgId);
-      allow create: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || uid == request.auth.uid);
+      allow create: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId));
       allow update: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
       allow delete: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
     }

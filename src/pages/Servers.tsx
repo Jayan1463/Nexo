@@ -719,14 +719,14 @@ collectAndSend();`;
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-4xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-[2.5rem] p-10 shadow-2xl overflow-hidden"
+              className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-[2.5rem] p-5 sm:p-10 shadow-2xl"
             >
               {/* Decorative elements */}
               <div className="absolute -top-24 -right-24 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
               
               <div className="space-y-10 relative z-10">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-6">
+                <div className="flex items-start justify-between gap-3 sm:items-center">
+                  <div className="flex min-w-0 items-center gap-3 sm:gap-6">
                     <div className={cn(
                       "w-16 h-16 rounded-[1.25rem] flex items-center justify-center border shadow-lg transition-all duration-700",
                       selectedServer.status === 'online' 
@@ -735,10 +735,10 @@ collectAndSend();`;
                     )}>
                       <ServerIcon className={cn("w-8 h-8", selectedServer.status === 'online' && "animate-pulse")} />
                     </div>
-                    <div>
-                      <h2 className="text-3xl font-black text-zinc-900 dark:text-white tracking-tight">{selectedServer.name}</h2>
+                    <div className="min-w-0">
+                      <h2 className="text-2xl sm:text-3xl font-black text-zinc-900 dark:text-white tracking-tight break-words">{selectedServer.name}</h2>
                       <div className="flex items-center gap-2 mt-1">
-                        <p className="text-zinc-500 dark:text-zinc-400 font-mono text-xs font-bold">{selectedServer.id}</p>
+                        <p className="text-zinc-500 dark:text-zinc-400 font-mono text-xs font-bold break-all">{selectedServer.id}</p>
                         <div className="w-1 h-1 rounded-full bg-zinc-300 dark:bg-zinc-700" />
                         <span className={cn(
                           "text-[10px] font-black uppercase tracking-widest",
@@ -750,8 +750,9 @@ collectAndSend();`;
                     </div>
                   </div>
                   <button 
+                    aria-label="Close server details"
                     onClick={() => setSelectedServer(null)}
-                    className="p-3 text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/5 rounded-xl transition-all"
+                    className="shrink-0 p-3 text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/5 rounded-xl transition-all"
                   >
                     <Plus className="w-6 h-6 rotate-45" />
                   </button>
@@ -882,6 +883,7 @@ collectAndSend();`;
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-black text-zinc-900 dark:text-white uppercase tracking-widest">Public Status Page</span>
                         <button
+                          aria-label={`Toggle public status for ${selectedServer.name}`}
                           onClick={() => handleUpdatePublicStatus(selectedServer.id, { publicStatusEnabled: !selectedServer.publicStatusEnabled })}
                           className={cn(
                             "w-11 h-6 rounded-full relative transition-colors",

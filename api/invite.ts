@@ -52,12 +52,19 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { email, orgId, role, invitedBy } = req.body || {};
+  const authHeader = String(req.headers.authorization || "");
+  if (!authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  let decoded: admin.auth.DecodedIdToken;
+  try {
+    decoded = await admin.auth().verifyIdToken(authHeader.slice(7).trim());
+  } catch {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+  const { email, orgId, role } = req.body || {};
   if (!email || !orgId) {
     return res.status(400).json({ error: "Email and orgId are required" });
-  }
-  if (!invitedBy || typeof invitedBy !== "string") {
-    return res.status(400).json({ error: "invitedBy is required" });
   }
 
   if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON && !process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
@@ -73,6 +80,13 @@ export default async function handler(req: any, res: any) {
 
   try {
     const db = getDb();
+    const orgSnap = await db.collection("organizations").doc(orgId).get();
+    if (!orgSnap.exists) return res.status(404).json({ error: "Organization not found" });
+    const memberSnap = await db.collection(`organizations/${orgId}/members`).doc(decoded.uid).get();
+    const memberRole = String(memberSnap.data()?.role || "");
+    if (orgSnap.data()?.ownerId !== decoded.uid && memberRole !== "owner" && memberRole !== "admin") {
+      return res.status(403).json({ error: "Only owner/admin can invite members" });
+    }
     const normalizedEmail = String(email).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       return res.status(400).json({ error: "Invalid email format" });
@@ -96,15 +110,14 @@ export default async function handler(req: any, res: any) {
       email: normalizedEmail,
       orgId,
       role: normalizedRole,
-      invitedBy,
+      invitedBy: decoded.uid,
       status: "pending",
       inviteToken: token,
       inviteLink,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const orgSnap = await db.collection("organizations").doc(orgId).get();
-    const orgName = orgSnap.exists ? (orgSnap.data()?.name || "your organization") : "your organization";
+    const orgName = orgSnap.data()?.name || "your organization";
     const fromEmail = process.env.INVITE_FROM_EMAIL || "Nexo Cloud <onboarding@resend.dev>";
     const subject = `You're invited to join ${orgName} on Nexo Cloud`;
     const body = `You were invited to join ${orgName} as ${normalizedRole}.\n\nAccept invite: ${inviteLink}\n\nIf you don't recognize this invite, you can ignore this email.`;

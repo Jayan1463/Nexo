@@ -287,6 +287,10 @@ export default function App() {
             if (nextOrgId && nextOrgId !== activeOrgId) {
               setOrg(nextOrgId);
               setProject(null);
+              const nextProjects = await getDocs(query(collection(db, `organizations/${nextOrgId}/projects`), limit(1)));
+              if (!nextProjects.empty && useAppStore.getState().currentOrgId === nextOrgId) {
+                setProject(nextProjects.docs[0].id);
+              }
             }
           });
         };
@@ -322,14 +326,15 @@ export default function App() {
     };
   }, [setUser, setOrg, setProject]);
   useEffect(() => {
+    if (loading || workspaceLoading || !user) return;
     if (!canAccessTab(userRole, activeTab)) {
       setActiveTab('dashboard');
     }
-  }, [activeTab, userRole]);
+  }, [activeTab, userRole, loading, workspaceLoading, user]);
 
   useEffect(() => {
     const acceptInvite = async () => {
-      if (!user || inviteHandledRef.current) return;
+      if (!user || workspaceLoading || !currentOrgId || !currentProjectId || inviteHandledRef.current) return;
       if (window.location.pathname !== '/accept-invite') return;
 
       inviteHandledRef.current = true;
@@ -345,49 +350,17 @@ export default function App() {
       }
 
       try {
-        const inviteRef = doc(db, `organizations/${orgId}/invites`, inviteId);
-        const inviteSnap = await getDoc(inviteRef);
-        if (!inviteSnap.exists()) {
-          alert('Invite not found or expired.');
-          window.history.replaceState({}, '', '/');
-          return;
-        }
-
-        const invite = inviteSnap.data() as any;
-        const inviteEmail = String(invite.email || '').toLowerCase();
-        const userEmail = String(user.email || '').toLowerCase();
-        if (invite.status !== 'pending' || invite.inviteToken !== token || inviteEmail !== userEmail) {
-          alert('This invite is invalid for your account.');
-          window.history.replaceState({}, '', '/');
-          return;
-        }
-
-        const memberRef = doc(db, `organizations/${orgId}/members`, user.uid);
-        await setDoc(memberRef, {
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName || '',
-          photoURL: user.photoURL || '',
-          role: invite.role || 'viewer',
-          joinedAt: serverTimestamp(),
-        }, { merge: true });
-
-        const userRef = doc(db, 'users', user.uid);
-        const userSnap = await getDoc(userRef);
-        const existingOrgIds = (userSnap.exists() ? (userSnap.data().orgIds || []) : []) as string[];
-        const mergedOrgIds = Array.from(new Set([orgId, ...existingOrgIds]));
-        await setDoc(userRef, {
-          currentOrgId: orgId,
-          orgIds: mergedOrgIds,
-        }, { merge: true });
-
-        await updateDoc(inviteRef, {
-          status: 'accepted',
-          acceptedBy: user.uid,
-          acceptedAt: serverTimestamp(),
+        const idToken = await auth.currentUser?.getIdToken(true);
+        if (!idToken) throw new Error('Please sign in again.');
+        const response = await fetch('/api/accept-invite', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orgId, inviteId, token }),
         });
-
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.error || 'Invite could not be accepted.');
         setOrg(orgId);
+        setProject(String(payload.projectId));
         alert('Invite accepted. Welcome to the organization.');
       } catch (error) {
         console.error('Failed to accept invite', error);
@@ -398,7 +371,7 @@ export default function App() {
     };
 
     acceptInvite();
-  }, [user, setOrg]);
+  }, [user, workspaceLoading, currentOrgId, currentProjectId, setOrg, setProject]);
 
   if (loading) {
     return (

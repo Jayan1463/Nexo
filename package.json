@@ -13,7 +13,9 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "node tests/srs-smoke.test.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:real": "firebase emulators:exec --config firebase.e2e.json --project demo-nexo-e2e --only auth,firestore 'playwright test --config playwright.real.config.ts'",
+    "test:all": "npm run lint && npm test && npm run build && npm run test:e2e && npm run test:e2e:real"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

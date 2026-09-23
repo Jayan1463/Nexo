@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function isActiveServer<T extends { deletedAt?: unknown; apiKeyStatus?: string | null }>(server: T) {
-  return !server.deletedAt && server.apiKeyStatus !== 'revoked';
+  return !server.deletedAt;
 }
 
 export const formatMetricValue = (value: number, type: string) => {

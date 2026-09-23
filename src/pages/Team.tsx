@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Users, Mail, Shield, UserMinus, Server } from 'lucide-react';
-import { collection, db, deleteDoc, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from '../firebase';
+import { auth, collection, db, deleteDoc, doc, getDoc, onSnapshot, query, serverTimestamp, setDoc, updateDoc, where } from '../firebase';
 import { useAppStore } from '../store';
 import { OrgMember, Server as ServerType, UserProfile } from '../types';
 import { cn, isActiveServer } from '../lib/utils';
@@ -68,9 +68,11 @@ export const Team = () => {
   const sendInvite = async () => {
     if (!currentOrgId || !user?.uid || !email.trim()) return;
     try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Please sign in again.');
       const response = await fetch('/api/invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ orgId: currentOrgId, email: email.trim().toLowerCase(), role, invitedBy: user.uid }),
       });
       const payload = await response.json().catch(() => ({}));

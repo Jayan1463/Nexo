@@ -776,15 +776,21 @@ async function startServer() {
 
   // Email Invitation Endpoint
   app.post("/api/invite", async (req, res) => {
-    const { email, orgId, role, invitedBy } = req.body;
+    const decoded = await requireAuth(req, res);
+    if (!decoded) return;
+    const { email, orgId, role } = req.body || {};
     if (!email || !orgId) {
       return res.status(400).json({ error: "Email and orgId are required" });
     }
-    if (!invitedBy || typeof invitedBy !== "string") {
-      return res.status(400).json({ error: "invitedBy is required" });
-    }
 
     try {
+      const orgSnap = await db.collection("organizations").doc(orgId).get();
+      if (!orgSnap.exists) return res.status(404).json({ error: "Organization not found" });
+      const memberSnap = await db.collection(`organizations/${orgId}/members`).doc(decoded.uid).get();
+      const memberRole = String(memberSnap.data()?.role || "");
+      if (orgSnap.data()?.ownerId !== decoded.uid && memberRole !== "owner" && memberRole !== "admin") {
+        return res.status(403).json({ error: "Only owner/admin can invite members" });
+      }
       const normalizedEmail = String(email).trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
         return res.status(400).json({ error: "Invalid email format" });
@@ -807,7 +813,7 @@ async function startServer() {
         email: normalizedEmail,
         orgId,
         role: normalizedRole,
-        invitedBy,
+        invitedBy: decoded.uid,
         status: 'pending',
         inviteToken: token,
         inviteLink,
@@ -816,8 +822,7 @@ async function startServer() {
       await inviteRef.set(inviteData);
 
       // 2. Send email via Resend when configured
-      const orgSnap = await db.collection("organizations").doc(orgId).get();
-      const orgName = orgSnap.exists ? (orgSnap.data()?.name || "your organization") : "your organization";
+      const orgName = orgSnap.data()?.name || "your organization";
       const fromEmail = process.env.INVITE_FROM_EMAIL || "Nexo Cloud <onboarding@resend.dev>";
       const resendApiKey = process.env.RESEND_API_KEY;
       const subject = `You're invited to join ${orgName} on Nexo Cloud`;
@@ -868,6 +873,59 @@ async function startServer() {
       res.json(responsePayload);
     } catch (error) {
       return sendApiError(res, error, "invite");
+    }
+  });
+
+  app.post("/api/accept-invite", async (req, res) => {
+    const decoded = await requireAuth(req, res);
+    if (!decoded) return;
+    const { orgId, inviteId, token } = req.body || {};
+    if (![orgId, inviteId, token].every((value) => typeof value === "string" && value.length > 0)) {
+      return res.status(400).json({ error: "orgId, inviteId, and token are required" });
+    }
+    try {
+      const orgRef = db.collection("organizations").doc(orgId);
+      const orgSnap = await orgRef.get();
+      if (!orgSnap.exists) return res.status(404).json({ error: "Organization not found" });
+      const projectSnap = await orgRef.collection("projects").limit(1).get();
+      if (projectSnap.empty) return res.status(409).json({ error: "Organization has no project" });
+      const inviteRef = orgRef.collection("invites").doc(inviteId);
+      const memberRef = orgRef.collection("members").doc(decoded.uid);
+      const userRef = db.collection("users").doc(decoded.uid);
+      const email = String(decoded.email || "").trim().toLowerCase();
+      await db.runTransaction(async (transaction) => {
+        const inviteSnap = await transaction.get(inviteRef);
+        const invite = inviteSnap.data();
+        if (!inviteSnap.exists || invite?.status !== "pending" || invite?.inviteToken !== token ||
+            String(invite?.email || "").toLowerCase() !== email) {
+          throw new Error("INVITE_INVALID");
+        }
+        const role = ["admin", "developer", "viewer"].includes(invite.role) ? invite.role : "viewer";
+        transaction.set(memberRef, {
+          uid: decoded.uid,
+          email,
+          displayName: String(decoded.name || ""),
+          role,
+          joinedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        transaction.set(userRef, {
+          currentOrgId: orgId,
+          orgIds: admin.firestore.FieldValue.arrayUnion(orgId),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        transaction.update(inviteRef, {
+          status: "accepted",
+          acceptedBy: decoded.uid,
+          acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
+          inviteToken: admin.firestore.FieldValue.delete(),
+        });
+      });
+      return res.json({ success: true, orgId, projectId: projectSnap.docs[0].id });
+    } catch (error) {
+      if (error instanceof Error && error.message === "INVITE_INVALID") {
+        return res.status(409).json({ error: "Invite is invalid, expired, or for another account" });
+      }
+      return sendApiError(res, error, "accept-invite");
     }
   });
 

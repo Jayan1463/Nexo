@@ -12,8 +12,9 @@ const config = {
   bufferLimit: Math.max(10, Number(process.env.NEXO_BUFFER_LIMIT || 100)),
 };
 
-const stateDir = path.join(os.homedir(), '.nexo-cloud-agent');
+const stateDir = process.env.NEXO_STATE_DIR || path.join(os.homedir(), '.nexo-cloud-agent');
 const bufferFile = path.join(stateDir, 'buffer.json');
+const runOnce = process.env.NEXO_RUN_ONCE === 'true';
 let retryDelayMs = 1000;
 
 async function loadBuffer() {
@@ -131,10 +132,18 @@ async function tick() {
     buffer.push(payload);
     await saveBuffer(buffer);
     console.error(`send failed, buffered reading: ${error.message}`);
+    if (runOnce) throw error;
     await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     retryDelayMs = Math.min(retryDelayMs * 2, 60_000);
   }
 }
 
-setInterval(() => void tick(), config.intervalMs);
-void tick();
+if (runOnce) {
+  void tick().catch((error) => {
+    console.error(`agent failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+} else {
+  setInterval(() => void tick(), config.intervalMs);
+  void tick();
+}

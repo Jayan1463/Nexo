@@ -113,7 +113,7 @@ export const ApiKeys = () => {
             </div>
             <div className="flex items-center gap-3">
               <span className={cn('text-[10px] uppercase tracking-widest font-black', server.apiKeyStatus === 'active' ? 'text-emerald-500' : 'text-red-500')}>{server.apiKeyStatus || 'legacy'}</span>
-              <button onClick={() => revoke(server)} className="text-red-500 hover:bg-red-500/10 rounded-xl p-2"><Ban className="w-5 h-5" /></button>
+              <button aria-label={`Revoke key for ${server.name}`} onClick={() => revoke(server)} className="text-red-500 hover:bg-red-500/10 rounded-xl p-2"><Ban className="w-5 h-5" /></button>
             </div>
           </div>
         ))}

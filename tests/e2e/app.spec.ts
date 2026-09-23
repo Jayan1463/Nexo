@@ -110,4 +110,31 @@ test.describe('Nexo Cloud authenticated dashboard shell', () => {
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     await expect(page.getByPlaceholder('Search infrastructure...')).toBeFocused();
   });
+
+  test('every owner module renders on a direct visit without a route crash', async ({ page }) => {
+    const modules = [
+      ['dashboard', 'System Overview'],
+      ['servers', 'Connected Nodes'],
+      ['analytics', 'System Analytics'],
+      ['logs', 'Log Explorer'],
+      ['alerts', 'Alert Management'],
+      ['incidents', 'Incidents'],
+      ['cost', 'Cost Intelligence'],
+      ['risk', 'Risk Analysis'],
+      ['status', 'Nexo Cloud Status'],
+      ['team', 'Team'],
+      ['apiKeys', 'API Keys'],
+      ['audit', 'Audit Logs'],
+      ['reports', 'Operational Reports'],
+      ['help', 'Help & Docs'],
+      ['settings', 'Settings'],
+    ] as const;
+
+    for (const [tab, heading] of modules) {
+      await page.goto(`/?tab=${tab}`);
+      await expect(page.getByRole('heading', { name: heading, exact: true }).first()).toBeVisible();
+      await expect(page.getByText('This module hit an error.')).toHaveCount(0);
+      await expectNoHorizontalOverflow(page);
+    }
+  });
 });

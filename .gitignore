@@ -9,3 +9,5 @@ coverage/
 .vercel
 release/*.dmg
 .env
+test-results/
+playwright-report/

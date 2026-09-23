@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/analytics';
 import {
   getAuth,
+  connectAuthEmulator,
   GoogleAuthProvider,
   signInWithPopup,
   signInWithRedirect,
@@ -12,14 +13,21 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
 } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, connectFirestoreEmulator, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+const useEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
+const app = initializeApp(useEmulators
+  ? { ...firebaseConfig, projectId: 'demo-nexo-e2e', authDomain: 'demo-nexo-e2e.firebaseapp.com' }
+  : firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+if (useEmulators) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:19099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 18080);
+}
 export const googleProvider = new GoogleAuthProvider();
-export const analyticsPromise = isAnalyticsSupported()
+export const analyticsPromise = useEmulators ? Promise.resolve(null) : isAnalyticsSupported()
   .then((supported) => (supported ? getAnalytics(app) : null))
   .catch(() => null);
 

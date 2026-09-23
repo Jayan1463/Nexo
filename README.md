@@ -55,6 +55,26 @@ npm run build
 npm test
 ```
 
+## Automated End-to-End Testing
+
+The fast browser suite uses a development-only synthetic owner and checks public pages, navigation, and API rejection cases:
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+The real-backend suite starts isolated Firebase Auth and Firestore emulators under the demo project `demo-nexo-e2e`. On desktop and mobile it signs up through Firebase Auth, provisions a server in Firestore, runs the actual monitoring agent once, sends telemetry and logs through Express, checks alerts, incidents, public status, report CSV, key revocation and replacement, server deletion, and signs out and back in. It also exercises owner-to-viewer invitations, account-deletion protection and cleanup, and denied unauthorized invitations and Firestore access:
+
+```bash
+npm ci --prefix monitoring-agent
+npm run test:e2e:real
+```
+
+Install the Firebase CLI, Java, and Chromium before running the real suite. The command starts and stops the emulators automatically. It uses fresh in-memory emulator data and does not write to the production Firebase project. To run every local gate with one command, use `npm run test:all`. CI runs the gates on every push and pull request.
+
+These emulator tests cover the local Express server. A deployed Vercel preview, real Resend delivery, and the join-request/deep-scan routes still need separate deployed-environment verification.
+
 ## Firebase Rules
 
 ```bash

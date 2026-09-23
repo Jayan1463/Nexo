@@ -312,11 +312,13 @@ export const Settings = () => {
 
     setLoading(true);
     try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Please sign in again.');
       const results = await Promise.all(
         rowsToInvite.map(async (row) => {
           const response = await fetch('/api/invite', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify({
               orgId: currentOrgId,
               email: row.email,
