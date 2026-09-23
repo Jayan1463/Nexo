@@ -557,3 +557,5 @@ const CostBar = ({ label, percentage, color }: any) => (
 );
 
 import { CheckCircle2, ChevronRight } from 'lucide-react';
+
+
