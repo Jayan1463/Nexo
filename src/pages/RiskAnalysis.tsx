@@ -6,7 +6,8 @@ import { cn, isActiveServer } from '../lib/utils';
 import { useAppStore } from '../store';
 
 export const RiskAnalysis = () => {
-  const { currentProjectId } = useAppStore();
+  const { currentProjectId, userRole } = useAppStore();
+  const canOperate = userRole !== 'viewer';
   const [servers, setServers] = useState<Server[]>([]);
   const [insights, setInsights] = useState<RiskInsight[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
@@ -37,7 +38,7 @@ export const RiskAnalysis = () => {
   }, [currentProjectId]);
 
   useEffect(() => {
-    if (!currentProjectId || servers.length === 0) return;
+    if (!canOperate || !currentProjectId || servers.length === 0) return;
     const unsubscribers = servers.map((server) => {
       const metricsQuery = query(collection(db, `servers/${server.id}/metrics`), orderBy('timestamp', 'desc'), limit(12));
       return onSnapshot(metricsQuery, async (snapshot) => {
@@ -78,7 +79,7 @@ export const RiskAnalysis = () => {
       });
     });
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [currentProjectId, servers]);
+  }, [currentProjectId, servers, canOperate]);
 
   const rankedInsights = useMemo(() => [...insights].sort((a, b) => {
     const rank = { critical: 3, warning: 2, info: 1 };
@@ -134,11 +135,11 @@ export const RiskAnalysis = () => {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => updateInsight(insight, 'under_review')} className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-white/10 text-xs font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2">
+              <button disabled={!canOperate} onClick={() => updateInsight(insight, 'under_review')} className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-white/10 text-xs font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2">
                 <ClipboardCheck className="w-4 h-4" />
                 Review
               </button>
-              <button onClick={() => updateInsight(insight, 'dismissed')} className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-white/10 text-xs font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2">
+              <button disabled={!canOperate} onClick={() => updateInsight(insight, 'dismissed')} className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-white/10 text-xs font-bold text-zinc-500 hover:text-zinc-900 dark:hover:text-white flex items-center gap-2">
                 <EyeOff className="w-4 h-4" />
                 Dismiss
               </button>

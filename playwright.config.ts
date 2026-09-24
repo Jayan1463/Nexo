@@ -9,7 +9,7 @@ export default defineConfig({
   fullyParallel: false,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: 'http://127.0.0.1:3130',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -17,10 +17,12 @@ export default defineConfig({
     command: 'npm run dev',
     env: {
       ...process.env,
+      PORT: '3130',
+      NEXO_E2E: 'true',
       VITE_ENABLE_E2E_AUTH: 'true',
     },
-    url: 'http://127.0.0.1:3000/api/health',
-    reuseExistingServer: !process.env.CI,
+    url: 'http://127.0.0.1:3130/api/health',
+    reuseExistingServer: false,
     timeout: 30_000,
   },
   projects: [

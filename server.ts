@@ -1,3 +1,8 @@
+import acceptInvite from './backend/accept-invite';
+import deepScan from './backend/deep-scan';
+import deleteProject from './backend/delete-project';
+import publicStatus from './backend/public-status';
+import { activeServerWrite, HttpError } from './backend/database';
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import { existsSync, readFileSync } from "fs";
@@ -58,6 +63,7 @@ function isMissingGoogleCredentials(error: unknown): boolean {
 }
 
 function sendApiError(res: express.Response, error: unknown, context: string) {
+  if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
   console.error(`Error in ${context}:`, error);
   if (isMissingGoogleCredentials(error)) {
     return res.status(503).json({
@@ -122,7 +128,7 @@ async function deleteDocs(
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
   const db = getDb();
 
   app.use(express.json());
@@ -591,13 +597,6 @@ async function startServer() {
       const projectId = serverData.projectId;
       const nextStatus = cpuValue >= 90 || memoryValue >= 90 || diskValue >= 90 ? "degraded" : "online";
 
-      // 2. Update server status and lastSeen
-      await serverDoc.ref.update({
-        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-        status: nextStatus,
-        apiKeyLastUsed: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
       // 3. Store metric
       const metricRef = serverDoc.ref.collection("metrics").doc();
       const metricData = {
@@ -614,7 +613,15 @@ async function startServer() {
         services: Array.isArray(services) ? services.slice(0, 100) : [],
         timestamp: timestamp || new Date().toISOString()
       };
-      await metricRef.set(metricData);
+      await activeServerWrite(db, serverId, (tx) => {
+      tx.update(serverDoc.ref, {
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+        status: nextStatus,
+        apiKeyLastUsed: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+        tx.set(metricRef, metricData);
+      });
 
       // 4. Anomaly Detection & Alerting
       const rules = await getAlertRules(projectId);
@@ -690,12 +697,12 @@ async function startServer() {
           status: "active",
           timestamp: new Date().toISOString(),
         };
-        await alertRef.set(alertPayload);
+        await activeServerWrite(db, serverId, (tx) => tx.set(alertRef, alertPayload));
 
         if (candidate.severity === "critical") {
           const incidentRef = db.collection("projects").doc(projectId).collection("incidents").doc();
           const nowIso = new Date().toISOString();
-          await incidentRef.set({
+          await activeServerWrite(db, serverId, (tx) => tx.set(incidentRef, {
             id: incidentRef.id,
             projectId,
             serverId,
@@ -712,7 +719,7 @@ async function startServer() {
             }],
             createdAt: nowIso,
             updatedAt: nowIso,
-          });
+          }));
         }
 
         if (rules.emailEnabled) {
@@ -766,7 +773,7 @@ async function startServer() {
         service: service.trim(),
         timestamp: timestamp || new Date().toISOString()
       };
-      await logRef.set(logData);
+      await activeServerWrite(db, serverId, (tx) => tx.set(logRef, logData));
 
       res.json({ success: true, logId: logRef.id });
     } catch (error) {
@@ -876,58 +883,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/accept-invite", async (req, res) => {
-    const decoded = await requireAuth(req, res);
-    if (!decoded) return;
-    const { orgId, inviteId, token } = req.body || {};
-    if (![orgId, inviteId, token].every((value) => typeof value === "string" && value.length > 0)) {
-      return res.status(400).json({ error: "orgId, inviteId, and token are required" });
-    }
-    try {
-      const orgRef = db.collection("organizations").doc(orgId);
-      const orgSnap = await orgRef.get();
-      if (!orgSnap.exists) return res.status(404).json({ error: "Organization not found" });
-      const projectSnap = await orgRef.collection("projects").limit(1).get();
-      if (projectSnap.empty) return res.status(409).json({ error: "Organization has no project" });
-      const inviteRef = orgRef.collection("invites").doc(inviteId);
-      const memberRef = orgRef.collection("members").doc(decoded.uid);
-      const userRef = db.collection("users").doc(decoded.uid);
-      const email = String(decoded.email || "").trim().toLowerCase();
-      await db.runTransaction(async (transaction) => {
-        const inviteSnap = await transaction.get(inviteRef);
-        const invite = inviteSnap.data();
-        if (!inviteSnap.exists || invite?.status !== "pending" || invite?.inviteToken !== token ||
-            String(invite?.email || "").toLowerCase() !== email) {
-          throw new Error("INVITE_INVALID");
-        }
-        const role = ["admin", "developer", "viewer"].includes(invite.role) ? invite.role : "viewer";
-        transaction.set(memberRef, {
-          uid: decoded.uid,
-          email,
-          displayName: String(decoded.name || ""),
-          role,
-          joinedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        transaction.set(userRef, {
-          currentOrgId: orgId,
-          orgIds: admin.firestore.FieldValue.arrayUnion(orgId),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-        transaction.update(inviteRef, {
-          status: "accepted",
-          acceptedBy: decoded.uid,
-          acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
-          inviteToken: admin.firestore.FieldValue.delete(),
-        });
-      });
-      return res.json({ success: true, orgId, projectId: projectSnap.docs[0].id });
-    } catch (error) {
-      if (error instanceof Error && error.message === "INVITE_INVALID") {
-        return res.status(409).json({ error: "Invite is invalid, expired, or for another account" });
-      }
-      return sendApiError(res, error, "accept-invite");
-    }
-  });
+  app.post('/api/accept-invite', acceptInvite);
 
   app.post("/api/delete-account", async (req, res) => {
     try {
@@ -993,119 +949,14 @@ async function startServer() {
     });
   });
 
-  // Deep scan endpoint for advanced anomaly insights
-  app.post("/api/deep-scan", async (req, res) => {
-    const { serverId, lookbackHours = 24 } = req.body || {};
-    if (!serverId) {
-      return res.status(400).json({ error: "serverId is required" });
-    }
-
-    try {
-      const serverRef = db.collection("servers").doc(serverId);
-      const serverSnap = await serverRef.get();
-      if (!serverSnap.exists) {
-        return res.status(404).json({ error: "Server not found" });
-      }
-
-      const lookback = Number.isFinite(Number(lookbackHours)) ? Math.min(Math.max(Number(lookbackHours), 1), 168) : 24;
-      const since = new Date(Date.now() - lookback * 60 * 60 * 1000);
-
-      const metricsSnap = await serverRef
-        .collection("metrics")
-        .orderBy("timestamp", "desc")
-        .limit(500)
-        .get();
-
-      const recentMetrics = metricsSnap.docs
-        .map((doc) => doc.data())
-        .filter((metric: any) => {
-          const ts = new Date(metric.timestamp);
-          return !Number.isNaN(ts.getTime()) && ts >= since;
-        });
-
-      if (recentMetrics.length === 0) {
-        return res.json({
-          success: true,
-          scan: {
-            serverId,
-            lookbackHours: lookback,
-            scannedPoints: 0,
-            anomaliesDetected: 0,
-            riskLevel: "none",
-            findings: [],
-            executedAt: new Date().toISOString(),
-          },
-        });
-      }
-
-      const findings: { type: string; severity: "warning" | "critical"; message: string }[] = [];
-      let cpuSpikeCount = 0;
-      let memSpikeCount = 0;
-      let netSpikeCount = 0;
-
-      for (const metric of recentMetrics) {
-        if (metric.cpu >= 95) cpuSpikeCount += 1;
-        if (metric.memory >= 92) memSpikeCount += 1;
-        if (metric.network >= 900) netSpikeCount += 1;
-      }
-
-      if (cpuSpikeCount >= 3) {
-        findings.push({
-          type: "cpu_spike",
-          severity: cpuSpikeCount >= 10 ? "critical" : "warning",
-          message: `Detected ${cpuSpikeCount} high CPU spikes in last ${lookback}h`,
-        });
-      }
-      if (memSpikeCount >= 3) {
-        findings.push({
-          type: "memory_pressure",
-          severity: memSpikeCount >= 10 ? "critical" : "warning",
-          message: `Detected ${memSpikeCount} memory pressure events in last ${lookback}h`,
-        });
-      }
-      if (netSpikeCount >= 3) {
-        findings.push({
-          type: "network_surge",
-          severity: netSpikeCount >= 10 ? "critical" : "warning",
-          message: `Detected ${netSpikeCount} network surge events in last ${lookback}h`,
-        });
-      }
-
-      const avgCpu = recentMetrics.reduce((sum: number, m: any) => sum + Number(m.cpu || 0), 0) / recentMetrics.length;
-      const avgMem = recentMetrics.reduce((sum: number, m: any) => sum + Number(m.memory || 0), 0) / recentMetrics.length;
-      const avgNet = recentMetrics.reduce((sum: number, m: any) => sum + Number(m.network || 0), 0) / recentMetrics.length;
-
-      const riskScore = avgCpu * 0.45 + avgMem * 0.45 + Math.min(avgNet / 10, 100) * 0.1 + findings.length * 10;
-      const riskLevel = riskScore >= 85 ? "critical" : riskScore >= 60 ? "elevated" : riskScore >= 35 ? "normal" : "none";
-
-      const scanRef = serverRef.collection("deep_scans").doc();
-      const scan = {
-        id: scanRef.id,
-        serverId,
-        lookbackHours: lookback,
-        scannedPoints: recentMetrics.length,
-        anomaliesDetected: findings.length,
-        riskLevel,
-        findings,
-        averages: {
-          cpu: Number(avgCpu.toFixed(2)),
-          memory: Number(avgMem.toFixed(2)),
-          network: Number(avgNet.toFixed(2)),
-        },
-        executedAt: new Date().toISOString(),
-      };
-      await scanRef.set(scan);
-
-      res.json({ success: true, scan });
-    } catch (error) {
-      return sendApiError(res, error, "deep scan");
-    }
-  });
+  app.post('/api/deep-scan', deepScan);
+  app.post('/api/delete-project', deleteProject);
+  app.get('/api/public-status', publicStatus);
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, ...(process.env.NEXO_E2E === 'true' ? { hmr: false } : {}) },
       appType: "spa",
     });
     app.use(vite.middlewares);

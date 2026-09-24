@@ -56,6 +56,15 @@ test('owner invites a viewer, viewer accepts, and invitation authorization is en
   await viewerPage.getByPlaceholder('Password', { exact: true }).fill(password);
   await viewerPage.getByPlaceholder('Confirm password').fill(password);
   await viewerPage.getByRole('button', { name: 'Create Account' }).click();
+  await expect(viewerPage.getByRole('heading', { name: 'Verify email to accept invitation' })).toBeVisible();
+  await viewerPage.getByRole('button', { name: 'Send verification email' }).click();
+  await expect(viewerPage.getByText('Verification email sent.')).toBeVisible();
+  const codes = await request.get('http://127.0.0.1:19099/emulator/v1/projects/demo-nexo-e2e/oobCodes');
+  const verification = (await codes.json()).oobCodes.find((entry: any) => entry.email === viewerEmail && entry.requestType === 'VERIFY_EMAIL');
+  expect(verification).toBeTruthy();
+  const verified = await request.post('http://127.0.0.1:19099/identitytoolkit.googleapis.com/v1/accounts:update?key=e2e', { data: { oobCode: verification.oobCode } });
+  expect(verified.status()).toBe(200);
+  await viewerPage.getByRole('button', { name: 'I verified my email' }).click();
   await expect(viewerPage.getByRole('heading', { name: 'System Overview' })).toBeVisible();
   await expect.poll(async () => (await inviteSnap.docs[0].ref.get()).data()?.status).toBe('accepted');
   await expect(viewerPage.getByRole('button', { name: 'API Keys' })).toHaveCount(0);
@@ -65,6 +74,12 @@ test('owner invites a viewer, viewer accepts, and invitation authorization is en
   expect(viewerDoc.data().currentOrgId).toBe(orgId);
   const member = await db.collection(`organizations/${orgId}/members`).doc(viewerDoc.id).get();
   expect(member.data()?.role).toBe('viewer');
+  await expect(page.getByText(viewerEmail, { exact: true })).toBeVisible();
+  if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Organization', exact: true }).click();
+  await expect(page.getByText(viewerEmail, { exact: true })).toBeVisible();
+
 
   const authResponse = await request.post('http://127.0.0.1:19099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=e2e', {
     data: { email: viewerEmail, password, returnSecureToken: true },

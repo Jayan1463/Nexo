@@ -1,0 +1,36 @@
+import { test, expect } from '@playwright/test';
+import crypto from 'node:crypto';
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+
+test('project creation and deletion persist through the Settings UI', async ({ page }, testInfo) => {
+  const id = crypto.randomUUID();
+  const email = `project-${id}@example.test`;
+  const db = getFirestore(initializeApp({ projectId: 'demo-nexo-e2e' }, id));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sign Up' }).click();
+  await page.getByPlaceholder('Display name').fill('Project Owner');
+  await page.getByPlaceholder('Email address').fill(email);
+  await page.getByPlaceholder('Password', { exact: true }).fill('ProjectsTest123!');
+  await page.getByPlaceholder('Confirm password').fill('ProjectsTest123!');
+  await page.getByRole('button', { name: 'Create Account' }).click();
+  await expect(page.getByRole('heading', { name: 'System Overview' })).toBeVisible();
+  if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByPlaceholder('Project Name').fill('Disposable Project');
+  await page.getByRole('button', { name: 'Create Project' }).click();
+  await expect(page.getByText('Disposable Project', { exact: true })).toBeVisible();
+  const profile = (await db.collection('users').where('email', '==', email).get()).docs[0].data();
+  const projects = await db.collection(`organizations/${profile.currentOrgId}/projects`).where('name', '==', 'Disposable Project').get();
+  const projectId = projects.docs[0].id;
+  expect((await db.doc(`projects/${projectId}`).get()).data()).toEqual({ orgId: profile.currentOrgId, lifecycle: 'active' });
+  await db.doc(`projects/${projectId}/logs/retained`).set({ message: 'must be removed' });
+  page.on('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: 'Delete project Disposable Project' }).click();
+  await expect(page.getByText('Project and its monitoring data deleted.')).toBeVisible();
+  await expect(page.getByText('Disposable Project', { exact: true })).toHaveCount(0);
+  expect((await db.doc(`projects/${projectId}/logs/retained`).get()).exists).toBe(false);
+  await page.reload();
+  await expect(page.getByText('Disposable Project', { exact: true })).toHaveCount(0);
+});

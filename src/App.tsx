@@ -1,3 +1,5 @@
+import { sendEmailVerification, reload } from 'firebase/auth';
+import { createProject } from './lib/projects';
 import React, { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { 
   auth, 
@@ -160,10 +162,14 @@ export default function App() {
   const { user, setUser, currentOrgId, currentProjectId, setOrg, setProject, theme, isSidebarCollapsed } = useAppStore();
   const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') || 'dashboard');
   const [userRole, setUserRole] = useState<AppRole>('viewer');
+  useEffect(() => { useAppStore.setState({ userRole }); }, [userRole]);
   const [loading, setLoading] = useState(true);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const inviteHandledRef = useRef(false);
+  const [inviteVerification, setInviteVerification] = useState(false);
+  const [verificationMessage, setVerificationMessage] = useState('');
+  const [inviteRetry, setInviteRetry] = useState(0);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -221,7 +227,7 @@ export default function App() {
           }
 
           const orgData = orgSnap.data() as any;
-          if (!orgData.inviteCode) {
+          if (!orgData.inviteCode && orgData.ownerId === firebaseUser.uid) {
             await setDoc(doc(db, 'organizations', orgId), { inviteCode: makeInviteCode() }, { merge: true });
           }
 
@@ -250,15 +256,7 @@ export default function App() {
           const projectsSnap = await getDocs(projectsQuery);
           let projectId = projectsSnap.empty ? '' : projectsSnap.docs[0].id;
           if (!projectId) {
-            const projectRef = doc(collection(db, `organizations/${orgId}/projects`));
-            projectId = projectRef.id;
-            await setDoc(projectRef, {
-              id: projectId,
-              orgId,
-              name: 'Default Project',
-              environment: 'prod',
-              createdAt: serverTimestamp(),
-            });
+            projectId = await createProject(orgId, 'Default Project', 'prod');
           }
 
           setProject(projectId);
@@ -270,7 +268,7 @@ export default function App() {
             if (!snap.exists()) return;
             const data = snap.data() as any;
             const nextOrgId = typeof data?.currentOrgId === 'string' ? data.currentOrgId : useAppStore.getState().currentOrgId;
-            let role = (data?.role || roleForMembership) as AppRole;
+            let role: AppRole = 'viewer';
             if (nextOrgId) {
               try {
                 const nextMemberSnap = await getDoc(doc(db, `organizations/${nextOrgId}/members`, firebaseUser.uid));
@@ -287,9 +285,11 @@ export default function App() {
             if (nextOrgId && nextOrgId !== activeOrgId) {
               setOrg(nextOrgId);
               setProject(null);
-              const nextProjects = await getDocs(query(collection(db, `organizations/${nextOrgId}/projects`), limit(1)));
-              if (!nextProjects.empty && useAppStore.getState().currentOrgId === nextOrgId) {
-                setProject(nextProjects.docs[0].id);
+              try {
+                const nextProjects = await getDocs(query(collection(db, `organizations/${nextOrgId}/projects`), limit(1)));
+                if (!nextProjects.empty && useAppStore.getState().currentOrgId === nextOrgId) setProject(nextProjects.docs[0].id);
+              } catch {
+                setAuthError('Your workspace access has changed. Please sign in again.');
               }
             }
           });
@@ -337,6 +337,8 @@ export default function App() {
       if (!user || workspaceLoading || !currentOrgId || !currentProjectId || inviteHandledRef.current) return;
       if (window.location.pathname !== '/accept-invite') return;
 
+      if (!auth.currentUser?.emailVerified) { setInviteVerification(true); return; }
+      setInviteVerification(false);
       inviteHandledRef.current = true;
       const params = new URLSearchParams(window.location.search);
       const orgId = params.get('orgId');
@@ -371,7 +373,32 @@ export default function App() {
     };
 
     acceptInvite();
-  }, [user, workspaceLoading, currentOrgId, currentProjectId, setOrg, setProject]);
+  }, [user, workspaceLoading, currentOrgId, currentProjectId, setOrg, setProject, inviteRetry]);
+
+  if (inviteVerification && user) {
+    return <main className="min-h-screen p-8 flex items-center justify-center bg-white text-zinc-900">
+      <section className="max-w-md space-y-5">
+        <h1 className="text-2xl font-bold">Verify email to accept invitation</h1>
+        <p>Verify {user.email} to join this organization. After verification, return here to continue.</p>
+        <button className="block rounded-xl bg-emerald-500 px-5 py-3" onClick={async () => {
+          try {
+            if (auth.currentUser) await sendEmailVerification(auth.currentUser);
+            setVerificationMessage('Verification email sent.');
+          } catch { setVerificationMessage('Could not send verification email. Please retry.'); }
+        }}>Send verification email</button>
+        <button className="block rounded-xl border px-5 py-3" onClick={async () => {
+          try {
+            if (!auth.currentUser) return;
+            await reload(auth.currentUser);
+            await auth.currentUser.getIdToken(true);
+            if (!auth.currentUser.emailVerified) { setVerificationMessage('Email is not verified yet.'); return; }
+            setInviteRetry((value) => value + 1);
+          } catch { setVerificationMessage('Could not check verification. Please retry.'); }
+        }}>I verified my email</button>
+        <p role="status">{verificationMessage}</p>
+      </section>
+    </main>;
+  }
 
   if (loading) {
     return (

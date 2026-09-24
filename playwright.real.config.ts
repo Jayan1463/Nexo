@@ -13,7 +13,7 @@ export default defineConfig({
   workers: 2,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: 'http://127.0.0.1:3131',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -21,6 +21,8 @@ export default defineConfig({
     command: 'node --import tsx server.ts',
     env: {
       ...process.env,
+      PORT: '3131',
+      NEXO_E2E: 'true',
       FIREBASE_PROJECT_ID: 'demo-nexo-e2e',
       FIREBASE_DATABASE_ID: '(default)',
       FIREBASE_SERVICE_ACCOUNT_JSON: '',
@@ -29,7 +31,7 @@ export default defineConfig({
       VITE_ENABLE_E2E_AUTH: 'false',
       VITE_USE_FIREBASE_EMULATORS: 'true',
     },
-    url: 'http://127.0.0.1:3000/api/health',
+    url: 'http://127.0.0.1:3131/api/health',
     reuseExistingServer: false,
     timeout: 60_000,
   },

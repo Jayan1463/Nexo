@@ -1,3 +1,4 @@
+import { activeServerWrite, HttpError } from '../backend/database';
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import crypto from "crypto";
@@ -97,7 +98,7 @@ export default async function handler(req: any, res: any) {
     const projectId = String(serverData.projectId || "");
 
     const logRef = db.collection("projects").doc(projectId).collection("logs").doc();
-    await logRef.set({
+    await activeServerWrite(db, serverId, (tx) => tx.set(logRef, {
       id: logRef.id,
       serverId,
       projectId,
@@ -105,10 +106,11 @@ export default async function handler(req: any, res: any) {
       message: message.trim(),
       service: service.trim(),
       timestamp: timestamp || new Date().toISOString(),
-    });
+    }));
 
     return res.status(200).json({ success: true, logId: logRef.id });
   } catch (error) {
+    if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
     console.error("Logs ingest failed:", error);
     return res.status(500).json({ error: "Internal server error" });
   }

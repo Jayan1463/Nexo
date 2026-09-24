@@ -1,7 +1,9 @@
+import type { AppRole } from './lib/rbac';
 import { create } from 'zustand';
 import { User } from 'firebase/auth';
 
 interface AppState {
+  userRole: AppRole;
   user: User | null;
   currentOrgId: string | null;
   currentProjectId: string | null;
@@ -20,6 +22,7 @@ const getInitialTheme = (): 'light' | 'dark' => {
 };
 
 export const useAppStore = create<AppState>((set) => ({
+  userRole: 'viewer',
   user: null,
   currentOrgId: null,
   currentProjectId: null,

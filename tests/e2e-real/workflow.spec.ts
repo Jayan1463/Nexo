@@ -56,7 +56,7 @@ test('real signup, agent, telemetry, logs, public status, alerts, incidents, and
       ...process.env,
       NEXO_RUN_ONCE: 'true',
       NEXO_STATE_DIR: path.join(os.tmpdir(), `nexo-e2e-agent-${unique}`),
-      NEXO_API_URL: 'http://127.0.0.1:3000/api/v1/telemetry',
+      NEXO_API_URL: 'http://127.0.0.1:3131/api/v1/telemetry',
       NEXO_SERVER_ID: serverId!,
       NEXO_API_KEY: apiKey!,
     },
@@ -101,6 +101,10 @@ test('real signup, agent, telemetry, logs, public status, alerts, incidents, and
     data: { cpu: 97, memory: 24, disk: 30, network: 2, timestamp: new Date().toISOString() },
   });
   expect(critical.status()).toBe(200);
+
+  await openModule('Analytics');
+  await page.getByRole('button', { name: 'Run Deep Scan' }).click();
+  await expect.poll(async () => (await db.collection(`servers/${serverId}/deep_scans`).get()).size).toBe(1);
 
   await openModule('Logs');
   await expect(page.getByText(logMessage)).toBeVisible();

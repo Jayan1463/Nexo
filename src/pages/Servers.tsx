@@ -58,9 +58,14 @@ const toDate = (value: any): Date | null => {
 
 const formatDate = (value: any, fallback = 'N/A') => toDate(value)?.toLocaleDateString() || fallback;
 const formatTime = (value: any, fallback = '') => toDate(value)?.toLocaleTimeString() || fallback;
+const isServerOnline = (server: Server, now: number) => {
+  const lastSeen = toDate(server.lastSeen);
+  return server.status === 'online' && Boolean(lastSeen && now - lastSeen.getTime() < 15000);
+};
 
 export const Servers = () => {
-  const { currentOrgId, currentProjectId, setProject, user } = useAppStore();
+  const { currentOrgId, currentProjectId, setProject, user, userRole } = useAppStore();
+  const canManage = userRole === 'owner' || userRole === 'admin';
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -77,6 +82,17 @@ export const Servers = () => {
   const [copied, setCopied] = useState(false);
   const [provisionError, setProvisionError] = useState<string | null>(null);
   const [projectIds, setProjectIds] = useState<string[]>([]);
+  const [now, setNow] = useState(Date.now());
+  const selectedServerOnline = selectedServer ? isServerOnline(selectedServer, now) : false;
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setSelectedServer((current) => current ? servers.find((server) => server.id === current.id) || current : null);
+  }, [servers]);
 
   useEffect(() => {
     if (!currentOrgId) {
@@ -172,6 +188,7 @@ export const Servers = () => {
 
   const handleAddServer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManage) return;
     setProvisionError(null);
     const effectiveProjectId = currentProjectId && projectIds.includes(currentProjectId)
       ? currentProjectId
@@ -257,6 +274,7 @@ export const Servers = () => {
   };
 
   const handleDeleteServer = async (serverId: string) => {
+    if (!canManage) return;
     setDeleteError(null);
     setDeletingServerId(serverId);
     try {
@@ -292,6 +310,7 @@ export const Servers = () => {
   };
 
   const handleUpdatePublicStatus = async (serverId: string, updates: Partial<Server>) => {
+    if (!canManage) return;
     await setDoc(doc(db, 'servers', serverId), updates, { merge: true });
     setSelectedServer((prev) => prev && prev.id === serverId ? { ...prev, ...updates } : prev);
   };
@@ -316,6 +335,7 @@ export const Servers = () => {
           </p>
         </div>
         <button 
+          disabled={!canManage}
           onClick={() => setShowAddModal(true)}
           className="bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 px-8 py-4 rounded-2xl text-sm font-black hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-zinc-900/10 dark:shadow-white/5 flex items-center gap-3"
         >
@@ -339,7 +359,8 @@ export const Servers = () => {
             Your infrastructure is currently silent. Deploy the Nexo Agent to start streaming real-time telemetry from your servers.
           </p>
           <button 
-            onClick={() => setShowAddModal(true)}
+            disabled={!canManage}
+          onClick={() => setShowAddModal(true)}
             className="bg-emerald-500 text-zinc-950 px-10 py-4 rounded-2xl font-black hover:scale-105 transition-all shadow-lg shadow-emerald-500/20"
           >
             Connect your first server
@@ -351,6 +372,8 @@ export const Servers = () => {
             <ServerCard 
               key={server.id} 
               server={server} 
+              now={now}
+              canManage={canManage}
               onDelete={() => handleDeleteServer(server.id)} 
               onSelect={() => setSelectedServer(server)}
             />
@@ -729,11 +752,11 @@ collectAndSend();`;
                   <div className="flex min-w-0 items-center gap-3 sm:gap-6">
                     <div className={cn(
                       "w-16 h-16 rounded-[1.25rem] flex items-center justify-center border shadow-lg transition-all duration-700",
-                      selectedServer.status === 'online' 
+                      selectedServerOnline
                         ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500 shadow-emerald-500/10" 
                         : "bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-white/5 text-zinc-400 dark:text-zinc-500"
                     )}>
-                      <ServerIcon className={cn("w-8 h-8", selectedServer.status === 'online' && "animate-pulse")} />
+                      <ServerIcon className={cn("w-8 h-8", selectedServerOnline && "animate-pulse")} />
                     </div>
                     <div className="min-w-0">
                       <h2 className="text-2xl sm:text-3xl font-black text-zinc-900 dark:text-white tracking-tight break-words">{selectedServer.name}</h2>
@@ -742,9 +765,9 @@ collectAndSend();`;
                         <div className="w-1 h-1 rounded-full bg-zinc-300 dark:bg-zinc-700" />
                         <span className={cn(
                           "text-[10px] font-black uppercase tracking-widest",
-                          selectedServer.status === 'online' ? "text-emerald-500" : "text-zinc-400"
+                          selectedServerOnline ? "text-emerald-500" : "text-zinc-400"
                         )}>
-                          {selectedServer.status}
+                          {selectedServerOnline ? 'online' : 'offline'}
                         </span>
                       </div>
                     </div>
@@ -782,7 +805,7 @@ collectAndSend();`;
                           {formatTime(selectedServer.lastSeen, 'Never')}
                         </p>
                         <p className="text-xs font-bold text-zinc-500">
-                          {selectedServer.status === 'online' ? 'Active Stream' : 'Connection Lost'}
+                          {selectedServerOnline ? 'Active Stream' : 'Connection Lost'}
                         </p>
                       </div>
                     </div>
@@ -836,6 +859,7 @@ collectAndSend();`;
                       <div className="pt-8 border-t border-zinc-200 dark:border-white/5">
                         {!showDeleteConfirm ? (
                           <button 
+                            disabled={!canManage}
                             onClick={() => {
                               setDeleteError(null);
                               setShowDeleteConfirm(true);
@@ -883,6 +907,7 @@ collectAndSend();`;
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-black text-zinc-900 dark:text-white uppercase tracking-widest">Public Status Page</span>
                         <button
+                          disabled={!canManage}
                           aria-label={`Toggle public status for ${selectedServer.name}`}
                           onClick={() => handleUpdatePublicStatus(selectedServer.id, { publicStatusEnabled: !selectedServer.publicStatusEnabled })}
                           className={cn(
@@ -894,6 +919,7 @@ collectAndSend();`;
                         </button>
                       </div>
                       <input
+                        disabled={!canManage}
                         value={selectedServer.publicName || selectedServer.name}
                         onChange={(event) => handleUpdatePublicStatus(selectedServer.id, { publicName: event.target.value })}
                         className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white"
@@ -985,11 +1011,15 @@ const Gauge = ({ value, label, color, icon: Icon }: { value: number, label: stri
 
 const ServerCard = ({
   server,
+  now,
   onDelete,
+  canManage,
   onSelect
 }: {
   server: Server;
+  now: number;
   onDelete: () => void;
+  canManage: boolean;
   onSelect: () => void;
 }) => {
   const [metrics, setMetrics] = useState<ServerMetric[]>([]);
@@ -1028,12 +1058,7 @@ const ServerCard = ({
   const latestMetric = metrics[metrics.length - 1];
 
   const lastSeenAt = toDate(server.lastSeen);
-
-  const isOnline = Boolean(
-    server.status === 'online' &&
-      lastSeenAt &&
-      Date.now() - lastSeenAt.getTime() < 15000
-  );
+  const isOnline = isServerOnline(server, now);
 
   const cpu = Number(latestMetric?.cpu || 0);
   const memory = Number(latestMetric?.memory || 0);
@@ -1106,6 +1131,7 @@ const ServerCard = ({
         </div>
 
         <button
+          disabled={!canManage}
           onClick={e => {
             e.stopPropagation();
             onDelete();

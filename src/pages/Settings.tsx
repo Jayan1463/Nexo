@@ -1,3 +1,4 @@
+import { createProject } from '../lib/projects';
 import React, { useState, useEffect } from 'react';
 import { 
   User, 
@@ -42,7 +43,7 @@ import { cn } from '../lib/utils';
 import { Organization, UserProfile, Invite, Project, OrgMember } from '../types';
 
 export const Settings = () => {
-  const { user, currentOrgId, setUser, setOrg: setCurrentOrg, setProject } = useAppStore();
+  const { user, currentOrgId, currentProjectId, setUser, setOrg: setCurrentOrg, setProject } = useAppStore();
   const [activeSection, setActiveSection] = useState<'profile' | 'organization' | 'projects' | 'security' | 'notifications'>('profile');
   const [displayName, setDisplayName] = useState(user?.displayName || '');
   const [org, setOrg] = useState<Organization | null>(null);
@@ -135,20 +136,8 @@ export const Settings = () => {
     const unsubscribeMembers = onSnapshot(membersSubQuery, async (snapshot) => {
       const memberDocs = snapshot.docs.map(d => d.data() as OrgMember);
       
-      // Fetch user profiles for these members
-      const memberProfiles = await Promise.all(memberDocs.map(async (m) => {
-        const uSnap = await getDoc(doc(db, 'users', m.uid));
-        const userData = uSnap.exists() ? (uSnap.data() as UserProfile) : null;
-        return {
-          uid: m.uid,
-          email: userData?.email || '',
-          displayName: userData?.displayName || '',
-          photoURL: userData?.photoURL || '',
-          role: m.role,
-        } as UserProfile & { role: string };
-      }));
-      
-      setMembers(memberProfiles);
+      setMembers(memberDocs.map((m) => ({ ...m, createdAt: m.joinedAt })));
+
     });
 
     // Fetch Invites
@@ -202,6 +191,9 @@ export const Settings = () => {
           createdAt: serverTimestamp(),
           ...payload,
         }, { merge: true });
+      }
+      if (currentOrgId) {
+        await updateDoc(doc(db, `organizations/${currentOrgId}/members`, user.uid), { displayName: normalizedDisplayName, photoURL: user.photoURL || '' });
       }
       if (auth.currentUser) {
         await updateProfile(auth.currentUser, { displayName: normalizedDisplayName });
@@ -356,15 +348,7 @@ export const Settings = () => {
     if (!currentOrgId || !newProjectName) return;
     setLoading(true);
     try {
-      const projectsRef = collection(db, `organizations/${currentOrgId}/projects`);
-      const newProjectRef = doc(projectsRef);
-      await setDoc(newProjectRef, {
-        id: newProjectRef.id,
-        orgId: currentOrgId,
-        name: newProjectName,
-        environment: newProjectEnv,
-        createdAt: serverTimestamp()
-      });
+      await createProject(currentOrgId, newProjectName.trim(), newProjectEnv);
       setNewProjectName('');
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -379,10 +363,20 @@ export const Settings = () => {
     if (!currentOrgId) return;
     if (!window.confirm("Are you sure you want to delete this project? All associated metrics and logs will be lost.")) return;
     try {
-      const projectRef = doc(db, `organizations/${currentOrgId}/projects`, projectId);
-      await deleteDoc(projectRef);
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Sign in required');
+      const response = await fetch('/api/delete-project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ orgId: currentOrgId, projectId }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Project deletion failed');
+      if (currentProjectId === projectId) setProject(projects.find((project) => project.id !== projectId)?.id || null);
+      setSuccessMessage('Project and its monitoring data deleted.');
     } catch (error) {
       console.error("Failed to delete project", error);
+      setErrorMessage(error instanceof Error ? error.message : 'Project deletion failed');
     }
   };
 
@@ -919,6 +913,7 @@ export const Settings = () => {
                         </div>
                         <div className="flex items-center gap-3">
                           <button 
+                            aria-label={`Delete project ${project.name}`}
                             onClick={() => handleDeleteProject(project.id)}
                             className="p-3 text-zinc-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
                           >

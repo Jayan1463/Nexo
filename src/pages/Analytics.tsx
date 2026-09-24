@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { MetricChart } from '../components/MetricChart';
 import { cn, isActiveServer } from '../lib/utils';
-import { collection, query, orderBy, limit, onSnapshot, db, where, handleFirestoreError, OperationType } from '../firebase';
+import { auth, collection, query, orderBy, limit, onSnapshot, db, where, handleFirestoreError, OperationType } from '../firebase';
 import { Server as ServerType, ServerMetric } from '../types';
 import { useAppStore } from '../store';
 import { motion } from 'framer-motion';
@@ -200,9 +200,11 @@ export const Analytics = () => {
     setIsDeepScanning(true);
     try {
       const lookbackHours = selectedRange === '7d' ? 168 : 24;
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Sign in required');
       const response = await fetch('/api/deep-scan', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ serverId: targetServerId, lookbackHours }),
       });
       const payload = await response.json();

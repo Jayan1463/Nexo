@@ -22,22 +22,15 @@ export const Team = () => {
     const unsubscribe = onSnapshot(collection(db, `organizations/${currentOrgId}/members`), async (snapshot) => {
       const rows = await Promise.all(snapshot.docs.map(async (memberDoc) => {
         const member = memberDoc.data() as OrgMember & { serverScope?: string[]; lastActivity?: any };
-        let profile = {} as UserProfile;
-        try {
-          const userSnap = await getDoc(doc(db, 'users', member.uid));
-          profile = userSnap.exists() ? userSnap.data() as UserProfile : {} as UserProfile;
-        } catch (error) {
-          console.error('Failed to load member profile', error);
-        }
         return {
           uid: member.uid,
-          email: profile.email || member.email || '',
-          displayName: profile.displayName || member.displayName || '',
-          photoURL: profile.photoURL || '',
+          email: member.email || '',
+          displayName: member.displayName || '',
+          photoURL: member.photoURL || '',
           role: member.role,
           serverScope: member.serverScope || [],
           lastActivity: member.lastActivity,
-          createdAt: profile.createdAt,
+          createdAt: member.joinedAt,
         } as MemberRow;
       }));
       setMembers(rows);
@@ -161,8 +154,8 @@ export const Team = () => {
               <p className="font-black text-zinc-900 dark:text-white">{member.displayName || member.email || member.uid}</p>
               <p className="text-sm text-zinc-500">{member.email || member.uid}</p>
             </div>
-            <select value={member.role} onChange={(event) => changeRole(member, event.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white">
-              <option value="owner">Owner</option>
+            <select disabled={member.role === 'owner'} value={member.role} onChange={(event) => changeRole(member, event.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white">
+              {member.role === 'owner' && <option value="owner">Owner</option>}
               <option value="admin">Admin</option>
               <option value="developer">Team Member</option>
               <option value="viewer">Viewer</option>
@@ -174,7 +167,7 @@ export const Team = () => {
                 </button>
               ))}
             </div>
-            <button onClick={() => removeMember(member)} className="text-red-500 hover:bg-red-500/10 rounded-xl p-3 justify-self-start xl:justify-self-end"><UserMinus className="w-5 h-5" /></button>
+            <button disabled={member.role === 'owner'} aria-label={`Remove ${member.email}`} onClick={() => removeMember(member)} className="text-red-500 hover:bg-red-500/10 rounded-xl p-3 justify-self-start xl:justify-self-end"><UserMinus className="w-5 h-5" /></button>
           </div>
         ))}
       </div>

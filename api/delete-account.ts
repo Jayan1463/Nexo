@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -8,7 +9,7 @@ function parseServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(existsSync(raw) ? readFileSync(raw, 'utf8') : raw);
     if (typeof parsed.private_key === "string") {
       parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
     }

@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Radio, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
-import { collection, db, onSnapshot, orderBy, query, where, limit } from '../firebase';
 import { Incident, Server } from '../types';
 import { cn, isActiveServer } from '../lib/utils';
 import { useAppStore } from '../store';
@@ -18,26 +17,27 @@ export const StatusPage = () => {
 
   useEffect(() => {
     if (!projectId) return;
-    const serverQuery = query(collection(db, 'servers'), where('projectId', '==', projectId), where('publicStatusEnabled', '==', true));
-    const unsubServers = onSnapshot(serverQuery, (snapshot) => {
-      setServers(snapshot.docs.map((serverDoc) => ({ id: serverDoc.id, ...serverDoc.data() } as Server)).filter(isActiveServer));
-      setServiceErrorMessage('');
-    }, (error) => {
-      console.error('Failed to load public services', error);
-      setServers([]);
-      setServiceErrorMessage('Could not load public services. Check Firestore rules for status visibility.');
-    });
-    const incidentQuery = query(collection(db, `projects/${projectId}/incidents`), where('publicVisible', '==', true), orderBy('createdAt', 'desc'), limit(30));
-    const unsubIncidents = onSnapshot(incidentQuery, (snapshot) => {
-      setIncidents(snapshot.docs.map((incidentDoc) => ({ id: incidentDoc.id, ...incidentDoc.data() } as Incident)));
-    }, (error) => {
-      console.error('Failed to load public incidents', error);
-      setIncidents([]);
-    });
-    return () => {
-      unsubServers();
-      unsubIncidents();
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`/api/public-status?projectId=${encodeURIComponent(projectId)}`, { signal: controller.signal });
+        if (!response.ok) throw new Error('Could not load public status.');
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        setServers(data.servers.map((server: Server) => ({ ...server, publicStatusEnabled: true })));
+        setIncidents(data.incidents.map((incident: Incident) => ({ ...incident, publicVisible: true })));
+        setServiceErrorMessage('');
+      } catch (error) {
+        if (!controller.signal.aborted) setServiceErrorMessage('Could not refresh public status.');
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(refresh, 3000);
+      }
     };
+    setServers([]);
+    setIncidents([]);
+    void refresh();
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [projectId]);
 
   const publicServices = servers.filter((server) => server.publicStatusEnabled);

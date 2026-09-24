@@ -1,267 +1,162 @@
-// ===============================================================
-// Assumed Data Model
-// ===============================================================
-//
-// Collection: users
-// Document ID: {uid}
-// Fields:
-//   - uid: string (required)
-//   - email: string (required)
-//   - displayName: string
-//   - photoURL: string
-//   - currentOrgId: string
-//   - role: string (owner, admin, developer, viewer)
-//   - createdAt: timestamp
-//
-// Collection: organizations
-// Document ID: {orgId}
-// Fields:
-//   - id: string (required)
-//   - name: string (required)
-//   - ownerId: string (required)
-//   - plan: string (free, pro, enterprise)
-//   - createdAt: timestamp
-//
-// Collection: projects
-// Document ID: {projectId}
-// Fields:
-//   - id: string (required)
-//   - orgId: string (required)
-//   - name: string (required)
-//   - environment: string (prod, staging, dev)
-//   - createdAt: timestamp
-//
-// Collection: metrics
-// Document ID: {metricId}
-// Fields:
-//   - projectId: string (required)
-//   - resourceId: string (required)
-//   - type: string (cpu, memory, network, disk)
-//   - value: number (required)
-//   - timestamp: timestamp (required)
-//   - isAnomaly: boolean
-//   - anomalyScore: number
-//
-// ===============================================================
-
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
-    function isAuthenticated() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function owner(orgId) {
+      return signedIn() && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerId == request.auth.uid;
     }
-
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+    function member(orgId) {
+      return signedIn() && exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
     }
-
-    function isOrgMember(orgId) {
-      return isAuthenticated() && 
-        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
-    }
-
-    function getOrgRole(orgId) {
+    function role(orgId) {
       return get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.role;
     }
-
-    function isOrgOwner(orgId) {
-      return isAuthenticated() && 
-        (get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerId == request.auth.uid);
+    function manages(orgId) { return owner(orgId) || (member(orgId) && role(orgId) == 'admin'); }
+    function operates(orgId) { return manages(orgId) || (member(orgId) && role(orgId) == 'developer'); }
+    function project(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data;
     }
-    
-    function userOrgId() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.currentOrgId;
+    function readsProject(projectId) {
+      return signedIn() && project(projectId).lifecycle == 'active' && member(project(projectId).orgId);
     }
-
-    function isProjectInUserOrg(projectId) {
-      return isAuthenticated() &&
-        isOrgMember(userOrgId()) &&
-        exists(/databases/$(database)/documents/organizations/$(userOrgId())/projects/$(projectId));
-    }
-
-    function isServerInUserOrg(serverId) {
-      return isAuthenticated() &&
-        isProjectInUserOrg(get(/databases/$(database)/documents/servers/$(serverId)).data.projectId);
-    }
-
-    function isAdmin() {
-      return isAuthenticated() &&
-        (request.auth.token.email == "2403717610421033@cit.edu.in" && request.auth.token.email_verified == true);
-    }
-
-    function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'email']) &&
-             data.uid is string &&
-             data.email is string &&
-             data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
-    }
-
-    function isValidMetric(data) {
-      return data.keys().hasAll(['projectId', 'serverId', 'cpu', 'memory', 'network', 'timestamp']) &&
-             data.projectId is string &&
-             data.serverId is string &&
-             data.cpu is number &&
-             data.memory is number &&
-             data.network is number &&
-             data.timestamp is string;
-    }
-
-    function isValidServer(data) {
-      return data.keys().hasAll(['id', 'projectId', 'name', 'apiKeyHash']) &&
-             data.id is string &&
-             data.projectId is string &&
-             data.name is string &&
-             data.name.size() > 0 && data.name.size() < 100 &&
-             data.apiKeyHash is string;
-    }
-
-    function isValidAlert(data) {
-      return data.keys().hasAll(['projectId', 'severity', 'message', 'timestamp']) &&
-             data.projectId is string &&
-             data.severity in ['info', 'warning', 'critical'] &&
-             data.message is string &&
-             data.timestamp is string;
-    }
-
-    function isValidLog(data) {
-      return data.keys().hasAll(['projectId', 'level', 'message', 'timestamp']) &&
-             data.projectId is string &&
-             data.level in ['info', 'warn', 'error'] &&
-             data.message is string &&
-             data.timestamp is string;
-    }
-
-    // ===============================================================
-    // Rules
-    // ===============================================================
+    function operatesProject(projectId) { return readsProject(projectId) && operates(project(projectId).orgId); }
+    function managesProject(projectId) { return readsProject(projectId) && manages(project(projectId).orgId); }
+    function serverProject(serverId) { return get(/databases/$(database)/documents/servers/$(serverId)).data.projectId; }
+    function validRole(value) { return value in ['admin', 'developer', 'viewer']; }
 
     match /users/{uid} {
-      allow read: if isOwner(uid) || isAdmin();
-      allow create: if isAuthenticated() && isOwner(uid) && isValidUser(request.resource.data);
-      allow update: if isAuthenticated() && isOwner(uid);
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.uid == resource.data.uid && request.resource.data.email == request.auth.token.email;
     }
-
     match /organizations/{orgId} {
-      allow read: if isOrgMember(orgId) || isAdmin() || (isAuthenticated() && resource.data.ownerId == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
-      allow update: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
-      allow delete: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId));
+      allow read: if member(orgId) || owner(orgId);
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid && request.resource.data.plan == 'free';
+      allow update: if manages(orgId) && request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['name', 'inviteCode', 'billingEmail', 'updatedAt']);
+      // Organization deletion needs a server-side cleanup workflow.
+      allow delete: if false;
     }
-
     match /organizations/{orgId}/members/{uid} {
-      allow read: if isOrgMember(orgId) || isAdmin() || isOrgOwner(orgId);
-      allow create: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId));
-      allow update: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
-      allow delete: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
+      allow read: if member(orgId) || owner(orgId);
+      allow create: if owner(orgId) && request.resource.data.uid == uid &&
+        ((uid == request.auth.uid && request.resource.data.role == 'owner') || validRole(request.resource.data.role));
+      allow update: if request.resource.data.uid == resource.data.uid && (
+        (manages(orgId) && uid != get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerId
+          && validRole(request.resource.data.role) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'serverScope', 'lastActivity'])) ||
+        (signedIn() && request.auth.uid == uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'lastActivity']))
+      );
+      allow delete: if manages(orgId) && uid != get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerId;
     }
-
+    // A single authoritative project-to-organization binding prevents another
+    // organization from claiming the same project ID. Create both docs atomically.
+    match /projects/{projectId} {
+      allow read: if member(resource.data.orgId) || owner(resource.data.orgId);
+      allow create: if manages(request.resource.data.orgId) && request.resource.data.keys().hasOnly(['orgId', 'lifecycle'])
+        && request.resource.data.lifecycle == 'active'
+        && getAfter(/databases/$(database)/documents/organizations/$(request.resource.data.orgId)/projects/$(projectId)).data.id == projectId;
+      allow update, delete: if false;
+    }
     match /organizations/{orgId}/projects/{projectId} {
-      allow read: if isOrgMember(orgId) || isAdmin() || isOrgOwner(orgId);
-      allow create: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
-      allow update: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
-      allow delete: if isAuthenticated() && (isAdmin() || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) == 'admin'));
+      allow read: if member(orgId) || owner(orgId);
+      allow create: if manages(orgId) && request.resource.data.id == projectId && request.resource.data.orgId == orgId
+        && getAfter(/databases/$(database)/documents/projects/$(projectId)).data.orgId == orgId
+        && getAfter(/databases/$(database)/documents/projects/$(projectId)).data.lifecycle == 'active';
+      allow update: if manages(orgId) && project(projectId).lifecycle == 'active'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'environment']);
+      allow delete: if false;
     }
-
     match /organizations/{orgId}/invites/{inviteId} {
-      allow read: if isAuthenticated() && (isOrgMember(orgId) || isOrgOwner(orgId) || request.auth.token.email == resource.data.email);
-      allow create: if isAuthenticated() && (isOrgMember(orgId) || isOrgOwner(orgId)) && (isAdmin() || getOrgRole(orgId) in ['owner', 'admin'] || isOrgOwner(orgId));
-      allow update: if isAuthenticated() && (request.auth.token.email == resource.data.email || isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) in ['owner', 'admin']));
-      allow delete: if isAuthenticated() && (isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) in ['owner', 'admin']));
+      allow read: if manages(orgId) || (signedIn() && request.auth.token.email == resource.data.email);
+      // Creation and acceptance are authenticated API transactions. Recipients
+      // cannot alter the role, token, address, or replay an accepted invitation.
+      allow create, update: if false;
+      allow delete: if manages(orgId);
     }
-
     match /projects/{projectId}/metrics/{metricId} {
-      allow read: if isProjectInUserOrg(projectId);
-      allow create: if isProjectInUserOrg(projectId) && isValidMetric(request.resource.data) && request.resource.data.projectId == projectId;
+      allow read: if readsProject(projectId);
+      allow write: if false;
     }
-
-    match /projects/{projectId}/alerts/{alertId} {
-      allow read: if isProjectInUserOrg(projectId);
-      allow create: if isProjectInUserOrg(projectId) && isValidAlert(request.resource.data) && request.resource.data.projectId == projectId;
-      allow update: if isProjectInUserOrg(projectId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acknowledgedBy', 'acknowledgedAt', 'resolvedBy', 'resolvedAt']));
-      allow delete: if isProjectInUserOrg(projectId);
-    }
-
     match /projects/{projectId}/logs/{logId} {
-      allow read: if isProjectInUserOrg(projectId);
-      allow create: if isProjectInUserOrg(projectId) && isValidLog(request.resource.data) && request.resource.data.projectId == projectId;
+      allow read: if readsProject(projectId);
+      allow write: if false;
     }
-
+    match /projects/{projectId}/alerts/{alertId} {
+      allow read: if readsProject(projectId);
+      allow create, delete: if false;
+      allow update: if operatesProject(projectId) && request.resource.data.status in ['active', 'acknowledged', 'resolved']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acknowledgedBy', 'acknowledgedAt', 'resolvedBy', 'resolvedAt']);
+    }
     match /projects/{projectId}/integrations/{integrationId} {
-      allow read: if isProjectInUserOrg(projectId);
-      allow create: if isProjectInUserOrg(projectId);
-      allow update: if isProjectInUserOrg(projectId);
-      allow delete: if isProjectInUserOrg(projectId);
+      allow read: if readsProject(projectId);
+      allow write: if operatesProject(projectId);
     }
-
+    match /projects/{projectId}/alert_rules/{ruleId} {
+      allow read: if readsProject(projectId);
+      allow write: if operatesProject(projectId);
+    }
     match /projects/{projectId}/incidents/{incidentId} {
-      allow read: if isProjectInUserOrg(projectId) || resource.data.publicVisible == true;
-      allow create: if isProjectInUserOrg(projectId) && request.resource.data.projectId == projectId;
-      allow update: if isProjectInUserOrg(projectId);
-      allow delete: if isProjectInUserOrg(projectId);
+      allow read: if readsProject(projectId);
+      allow create: if operatesProject(projectId) && request.resource.data.projectId == projectId;
+      allow update: if operatesProject(projectId) && request.resource.data.projectId == resource.data.projectId;
+      allow delete: if managesProject(projectId);
     }
-
     match /projects/{projectId}/risk_insights/{insightId} {
-      allow read: if isProjectInUserOrg(projectId);
-      allow create: if isProjectInUserOrg(projectId) && request.resource.data.projectId == projectId;
-      allow update: if isProjectInUserOrg(projectId);
-      allow delete: if isProjectInUserOrg(projectId);
+      allow read: if readsProject(projectId);
+      allow create: if operatesProject(projectId) && request.resource.data.projectId == projectId;
+      allow update: if operatesProject(projectId) && request.resource.data.projectId == resource.data.projectId;
+      allow delete: if managesProject(projectId);
     }
-
     match /servers/{serverId} {
-      allow read: if isProjectInUserOrg(resource.data.projectId) || resource.data.publicStatusEnabled == true;
-      allow create: if isAuthenticated() && isValidServer(request.resource.data) && isProjectInUserOrg(request.resource.data.projectId);
-      allow update: if isServerInUserOrg(serverId) && (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-        'name', 'hostname', 'os', 'environment', 'description', 'tags',
-        'status', 'lastSeen', 'deletedAt', 'publicStatusEnabled', 'publicName',
-        'apiKeyHash', 'apiKeyStatus', 'apiKeyName', 'apiKeyLastUsed',
-        'apiKeyCreatedAt', 'apiKeyRevokedAt'
-      ]));
-      allow delete: if isServerInUserOrg(serverId);
+      allow read: if readsProject(resource.data.projectId);
+      allow create: if managesProject(request.resource.data.projectId) && request.resource.data.id == serverId
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() < 100
+        && request.resource.data.apiKeyHash is string && request.resource.data.apiKeyHash.size() == 64
+        && request.resource.data.status == 'offline' && request.resource.data.apiKeyStatus == 'active'
+        && !request.resource.data.keys().hasAny(['apiKey', 'lastSeen']);
+      allow update: if managesProject(resource.data.projectId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'hostname', 'os', 'environment', 'description', 'tags', 'status',
+          'deletedAt', 'publicStatusEnabled', 'publicName', 'apiKeyHash', 'apiKeyStatus',
+          'apiKeyName', 'apiKeyCreatedAt', 'apiKeyRevokedAt', 'apiKeyLastUsed'
+        ]) && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['apiKeyLastUsed'])
+          || (request.resource.data.apiKeyLastUsed == null && request.resource.data.apiKeyHash != resource.data.apiKeyHash));
+      allow delete: if false;
     }
-
     match /servers/{serverId}/metrics/{metricId} {
-      allow read: if isServerInUserOrg(serverId);
-      allow create: if isServerInUserOrg(serverId) && isValidMetric(request.resource.data);
+      allow read: if readsProject(serverProject(serverId));
+      allow write: if false;
     }
-
+    match /servers/{serverId}/deep_scans/{scanId} {
+      allow read: if readsProject(serverProject(serverId));
+      allow write: if false;
+    }
     match /servers/{serverId}/audit_logs/{auditId} {
-      allow read: if isServerInUserOrg(serverId);
-      allow create: if isServerInUserOrg(serverId);
+      allow read: if readsProject(serverProject(serverId));
+      allow create: if managesProject(serverProject(serverId));
+      allow update, delete: if false;
     }
-
     match /organizations/{orgId}/auditLogs/{auditId} {
-      allow read: if isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) in ['owner', 'admin']);
-      allow create: if isAuthenticated() && (isOrgOwner(orgId) || (isOrgMember(orgId) && getOrgRole(orgId) in ['owner', 'admin']));
+      allow read: if manages(orgId);
+      allow create: if manages(orgId) && request.resource.data.userId == request.auth.uid;
       allow update, delete: if false;
     }
-
     match /projects/{projectId}/auditLogs/{auditId} {
-      allow read: if isProjectInUserOrg(projectId);
-      allow create: if isProjectInUserOrg(projectId);
+      allow read: if managesProject(projectId);
+      allow create: if operatesProject(projectId) && request.resource.data.userId == request.auth.uid;
       allow update, delete: if false;
     }
-
     match /joinRequests/{requestId} {
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
-      allow read: if isAuthenticated() && (
-        request.auth.uid == resource.data.userId ||
-        isOrgOwner(resource.data.orgId) ||
-        (isOrgMember(resource.data.orgId) && getOrgRole(resource.data.orgId) == 'admin')
-      );
-      allow update: if isAuthenticated() && (
-        isOrgOwner(resource.data.orgId) ||
-        (isOrgMember(resource.data.orgId) && getOrgRole(resource.data.orgId) == 'admin')
-      );
+      allow read: if signedIn() && (request.auth.uid == resource.data.userId || manages(resource.data.orgId));
+      allow write: if false;
     }
-
     match /notifications/{notificationId} {
-      allow read: if isAuthenticated() && request.auth.uid == resource.data.recipientUserId;
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && request.auth.uid == resource.data.recipientUserId;
+      allow read: if signedIn() && request.auth.uid == resource.data.recipientUserId;
+      allow update: if signedIn() && request.auth.uid == resource.data.recipientUserId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
+      allow create, delete: if false;
     }
   }
 }

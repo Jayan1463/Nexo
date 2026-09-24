@@ -1,3 +1,4 @@
+import { activeServerWrite, HttpError } from '../backend/database';
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
 import crypto from "crypto";
@@ -107,7 +108,9 @@ export default async function handler(req: any, res: any) {
     const serverId = serverDoc.id;
     const projectId = String(serverData.projectId || "");
 
-    await serverDoc.ref.set(
+    const metricRef = serverDoc.ref.collection("metrics").doc();
+    await activeServerWrite(db, serverId, (tx) => {
+    tx.set(serverDoc.ref,
       {
         status: cpuValue >= 90 || memoryValue >= 90 || diskValue >= 90 ? "degraded" : "online",
         lastSeen: new Date().toISOString(),
@@ -116,8 +119,7 @@ export default async function handler(req: any, res: any) {
       { merge: true },
     );
 
-    const metricRef = serverDoc.ref.collection("metrics").doc();
-    await metricRef.set({
+      tx.set(metricRef, {
       id: metricRef.id,
       serverId,
       projectId,
@@ -130,6 +132,7 @@ export default async function handler(req: any, res: any) {
       ports: Array.isArray(ports) ? ports.slice(0, 100) : [],
       services: Array.isArray(services) ? services.slice(0, 100) : [],
       timestamp: timestamp || new Date().toISOString(),
+      });
     });
 
     const rulesSnap = await db.collection("projects").doc(projectId).collection("alert_rules").doc("default").get();
@@ -171,7 +174,7 @@ export default async function handler(req: any, res: any) {
       if (inCooldown) continue;
 
       const alertRef = db.collection("projects").doc(projectId).collection("alerts").doc();
-      await alertRef.set({
+      await activeServerWrite(db, serverId, (tx) => tx.set(alertRef, {
         id: alertRef.id,
         projectId,
         serverId,
@@ -180,11 +183,11 @@ export default async function handler(req: any, res: any) {
         message: candidate.message,
         status: "active",
         timestamp: new Date().toISOString(),
-      });
+      }));
       if (candidate.severity === "critical") {
         const incidentRef = db.collection("projects").doc(projectId).collection("incidents").doc();
         const now = new Date().toISOString();
-        await incidentRef.set({
+        await activeServerWrite(db, serverId, (tx) => tx.set(incidentRef, {
           id: incidentRef.id,
           projectId,
           serverId,
@@ -196,12 +199,13 @@ export default async function handler(req: any, res: any) {
           timeline: [{ status: "investigating", message: "Incident opened automatically.", timestamp: now }],
           createdAt: now,
           updatedAt: now,
-        });
+        }));
       }
     }
 
     return res.status(200).json({ success: true, serverId });
   } catch (error) {
+    if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
     console.error("Metrics ingest failed:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
