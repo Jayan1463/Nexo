@@ -75,9 +75,6 @@ export default async function handler(req: any, res: any) {
   }
 
   const resendApiKey = process.env.RESEND_API_KEY;
-  if (!resendApiKey) {
-    return res.status(503).json({ error: "Email provider not configured. Set RESEND_API_KEY in Vercel env." });
-  }
 
   try {
     const db = getDb();
@@ -123,27 +120,30 @@ export default async function handler(req: any, res: any) {
     const subject = `You're invited to join ${orgName} on Nexo Cloud`;
     const body = `You were invited to join ${orgName} as ${normalizedRole}.\n\nAccept invite: ${inviteLink}\n\nIf you don't recognize this invite, you can ignore this email.`;
 
-    const resendResp = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: [normalizedEmail],
-        subject,
-        text: body,
-      }),
-    });
-
-    if (!resendResp.ok) {
-      const resendError = await resendResp.text();
-      console.error("Resend send failed", resendResp.status, resendError);
-      return res.status(502).json({ error: "Invite created, but failed to send email. Check Resend sender/domain config." });
+    if (resendApiKey) {
+      try {
+        const resendResp = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: fromEmail,
+            to: [normalizedEmail],
+            subject,
+            text: body,
+          }),
+        });
+        if (resendResp.ok) return res.status(200).json({ success: true, inviteId: inviteRef.id });
+        console.error("Resend send failed", resendResp.status, await resendResp.text());
+      } catch (error) {
+        console.error("Resend send failed", error);
+      }
+      return res.status(200).json({ success: true, inviteId: inviteRef.id, inviteLink });
     }
 
-    return res.status(200).json({ success: true, inviteId: inviteRef.id });
+    return res.status(200).json({ success: true, inviteId: inviteRef.id, inviteLink });
   } catch (error) {
     console.error("Error sending invite:", error);
     return res.status(500).json({ error: "Internal server error" });

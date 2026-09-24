@@ -53,19 +53,35 @@ test('database permissions, private status data, scans, and complete project cle
     await db.doc(`projects/${projectId}/alerts/alert`).set({ projectId, status: 'active' });
     const denied = (promise: Promise<unknown>) => expect(promise).rejects.toMatchObject({ code: 'permission-denied' });
     const server = (client: typeof viewer) => doc(client.db, `servers/${serverId}`);
-    expect((await getDoc(server(viewer))).exists()).toBe(true);
+    for (const client of [owner, admin, developer, viewer]) {
+      expect((await getDoc(server(client))).exists()).toBe(true);
+      expect((await getDoc(doc(client.db, `projects/${projectId}/alerts/alert`))).exists()).toBe(true);
+    }
+    const provision = (client: typeof viewer, id: string) => setDoc(doc(client.db, `servers/${id}`), {
+      id, projectId, name: id, status: 'offline', apiKeyStatus: 'active', apiKeyHash: 'b'.repeat(64),
+    });
+    await provision(owner, `owner-${id}`);
+    await provision(admin, `admin-${id}`);
+    await denied(provision(developer, `developer-${id}`));
+    await denied(provision(viewer, `viewer-${id}`));
     await denied(updateDoc(server(viewer), { apiKeyHash: 'a'.repeat(64) }));
     await denied(deleteDoc(server(viewer)));
     await denied(updateDoc(doc(viewer.db, `projects/${projectId}/incidents/incident`), { status: 'resolved' }));
     await denied(setDoc(doc(viewer.db, `servers/${serverId}/metrics/fake`), { cpu: 1 }));
     await denied(updateDoc(server(developer), { apiKeyStatus: 'revoked' }));
+    await denied(updateDoc(server(developer), { publicStatusEnabled: false }));
+    await denied(setDoc(doc(viewer.db, `projects/${projectId}/alert_rules/default`), { cpuWarning: 70 }));
+    await denied(setDoc(doc(viewer.db, `projects/${projectId}/incidents/viewer`), { projectId, status: 'investigating' }));
     await updateDoc(doc(developer.db, `projects/${projectId}/alerts/alert`), { status: 'acknowledged' });
     await setDoc(doc(developer.db, `projects/${projectId}/alert_rules/default`), { cpuWarning: 70, cpuCritical: 95 });
+    await setDoc(doc(developer.db, `projects/${projectId}/incidents/developer`), { projectId, status: 'investigating' });
     expect((await db.doc(`projects/${projectId}/alert_rules/default`).get()).data()?.cpuWarning).toBe(70);
     await denied(updateDoc(doc(admin.db, `organizations/${orgId}`), { ownerId: admin.uid }));
     await denied(updateDoc(doc(admin.db, `organizations/${orgId}/members/${admin.uid}`), { role: 'owner' }));
     await denied(deleteDoc(doc(admin.db, `organizations/${orgId}/members/${owner.uid}`)));
+    await denied(updateDoc(doc(developer.db, `organizations/${orgId}/members/${viewer.uid}`), { role: 'admin' }));
     await updateDoc(server(admin), { publicName: 'Public API' });
+    await updateDoc(server(owner), { publicStatusEnabled: true });
     await denied(getDoc(doc(owner.db, `users/${viewer.uid}`)));
     expect((await getDoc(doc(owner.db, `organizations/${orgId}/members/${viewer.uid}`))).data()?.email).toBe(viewer.email);
 
@@ -137,7 +153,7 @@ test('database permissions, private status data, scans, and complete project cle
     expect((await request.post('/api/delete-project', { headers: owner.headers, data: deletion })).status()).toBe(200);
     expect((await request.post('/api/metrics', { headers: { 'X-Nexo-API-Key': key }, data: { cpu: 20, memory: 30, network: 2 } })).status()).toBe(401);
     expect((await request.get(`/api/public-status?projectId=${projectId}`)).status()).toBe(200);
-    expect((await request.post('/api/delete-project', { headers: owner.headers, data: { orgId, projectId: newProject } })).status()).toBe(200);
+    expect((await request.post('/api/delete-project', { headers: admin.headers, data: { orgId, projectId: newProject } })).status()).toBe(200);
     expect((await request.post('/api/delete-project', { headers: owner.headers, data: { orgId, projectId: otherProject } })).status()).toBe(409);
   } finally {
     await Promise.all(clients.map(deleteApp));

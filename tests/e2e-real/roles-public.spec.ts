@@ -5,6 +5,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
 test('owner, admin, developer, viewer, and anonymous public status use their intended access', async ({ browser, request }, testInfo) => {
+  test.setTimeout(120_000);
   const id = crypto.randomUUID();
   const app = initializeApp({ projectId: 'demo-nexo-e2e' }, `roles-${id}`);
   const db = getFirestore(app);
@@ -30,6 +31,12 @@ test('owner, admin, developer, viewer, and anonymous public status use their int
 
   for (const { role, email } of users) {
     const page = await browser.newPage();
+    const permissionErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error' && /permission-denied|Missing or insufficient permissions|Firestore Error/.test(message.text())) {
+        permissionErrors.push(message.text());
+      }
+    });
     await page.goto('/');
     await page.getByPlaceholder('Email address').fill(email);
     await page.getByPlaceholder('Password', { exact: true }).fill(password);
@@ -40,7 +47,27 @@ test('owner, admin, developer, viewer, and anonymous public status use their int
     await expect(page.getByRole('button', { name: 'Alerts', exact: true })).toHaveCount(role === 'viewer' ? 0 : 1);
     await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveCount(role === 'owner' || role === 'admin' ? 1 : 0);
     await expect(page.getByRole('button', { name: 'API Keys', exact: true })).toHaveCount(role === 'owner' || role === 'admin' ? 1 : 0);
+    const commonModules: Array<[string, string]> = [
+      ['Servers', 'Connected Nodes'], ['Analytics', 'System Analytics'], ['Logs', 'Log Explorer'],
+      ['Cost Intelligence', 'Cost Intelligence'], ['Risk Analysis', 'Risk Analysis'],
+      ['Status Page', 'Nexo Cloud Status'], ['Reports', 'Operational Reports'],
+      ['Help & Docs', 'Help & Docs'], ['Dashboard', 'System Overview'],
+    ];
+    const operatorModules: Array<[string, string]> = [['Alerts', 'Alert Management'], ['Incidents', 'Incidents']];
+    const managerModules: Array<[string, string]> = [['Team', 'Team'], ['API Keys', 'API Keys'], ['Audit Logs', 'Audit Logs'], ['Settings', 'Settings']];
+    const modules = [...commonModules, ...(role === 'viewer' ? [] : operatorModules),
+      ...(role === 'owner' || role === 'admin' ? managerModules : [])];
+    for (const [nav, heading] of modules) {
+      if (testInfo.project.name.includes('mobile') && await page.getByRole('button', { name: 'Open navigation menu' }).count()) {
+        await page.getByRole('button', { name: 'Open navigation menu' }).click();
+      }
+      await page.getByRole('button', { name: nav, exact: true }).click();
+      await expect(page.getByRole('heading', { name: heading, exact: true }).first()).toBeVisible();
+      await expect(page.getByText('This module hit an error.')).toHaveCount(0);
+    }
+    expect(permissionErrors).toEqual([]);
     if (role === 'viewer' || role === 'developer') {
+      if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
       await page.getByRole('button', { name: 'Servers', exact: true }).click();
       await expect(page.getByRole('button', { name: 'Provision Node' })).toBeDisabled();
     }
@@ -51,6 +78,7 @@ test('owner, admin, developer, viewer, and anonymous public status use their int
     }
 
     if (role === 'admin') {
+      if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
       await page.getByRole('button', { name: 'Team', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Team', exact: true })).toBeVisible();
       if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();

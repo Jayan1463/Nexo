@@ -16,6 +16,7 @@ export const Team = () => {
   const [role, setRole] = useState<'admin' | 'developer' | 'viewer'>('viewer');
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [inviteLink, setInviteLink] = useState('');
 
   useEffect(() => {
     if (!currentOrgId) return;
@@ -60,6 +61,7 @@ export const Team = () => {
 
   const sendInvite = async () => {
     if (!currentOrgId || !user?.uid || !email.trim()) return;
+    setInviteLink('');
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error('Please sign in again.');
@@ -74,7 +76,12 @@ export const Team = () => {
         return;
       }
       await writeAuditLog({ orgId: currentOrgId, userId: user.uid, action: 'user_invited', resource: 'invite', metadata: { email, role } });
-      setMessage('Invitation created and queued for email delivery.');
+      if (typeof payload.inviteLink === 'string') {
+        setInviteLink(payload.inviteLink);
+        setMessage('Invitation created. Email was not delivered; share this link with the invitee.');
+      } else {
+        setMessage('Invitation email sent.');
+      }
       setErrorMessage('');
       setEmail('');
     } catch (error) {
@@ -145,6 +152,7 @@ export const Team = () => {
         <button onClick={sendInvite} className="bg-emerald-500 text-zinc-950 px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2"><Mail className="w-4 h-4" />Invite</button>
       </div>
       {message && <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 px-4 py-3 text-sm">{message}</div>}
+      {inviteLink && <input aria-label="Invitation link" readOnly value={inviteLink} onFocus={(event) => event.currentTarget.select()} className="w-full rounded-xl border border-emerald-500/30 bg-white dark:bg-zinc-900 px-4 py-3 text-sm text-zinc-900 dark:text-white" />}
       {errorMessage && <div className="rounded-xl border border-red-500/30 bg-red-500/10 text-red-500 px-4 py-3 text-sm">{errorMessage}</div>}
 
       <div className="bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-white/10 rounded-2xl overflow-hidden">

@@ -836,41 +836,28 @@ async function startServer() {
       const body = `You were invited to join ${orgName} as ${normalizedRole}.\n\nAccept invite: ${inviteLink}\n\nIf you don't recognize this invite, you can ignore this email.`;
 
       if (resendApiKey) {
-        const resendResp = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${resendApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            from: fromEmail,
-            to: [normalizedEmail],
-            subject,
-            text: body,
-          }),
-        });
-
-        if (!resendResp.ok) {
-          const resendErrorText = await resendResp.text();
-          console.error("Resend send failed", resendResp.status, resendErrorText);
-          if (resendResp.status === 403) {
-            return res.status(502).json({
-              error: "Invite created, but Resend blocked delivery. Verify a sending domain in Resend and use that domain in INVITE_FROM_EMAIL.",
-            });
+        try {
+          const resendResp = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${resendApiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              from: fromEmail,
+              to: [normalizedEmail],
+              subject,
+              text: body,
+            }),
+          });
+          if (!resendResp.ok) {
+            console.error("Resend send failed", resendResp.status, await resendResp.text());
+            return res.json({ success: true, inviteId: inviteRef.id, inviteLink });
           }
-          return res.status(502).json({ error: "Invite created, but failed to send email. Check RESEND_API_KEY / INVITE_FROM_EMAIL." });
+        } catch (error) {
+          console.error("Resend send failed", error);
+          return res.json({ success: true, inviteId: inviteRef.id, inviteLink });
         }
-      } else {
-        // Fallback: persist intended email payload for visibility in dev environments.
-        const emailRef = db.collection("sent_emails").doc();
-        await emailRef.set({
-          id: emailRef.id,
-          to: normalizedEmail,
-          subject,
-          body,
-          status: 'logged',
-          timestamp: admin.firestore.FieldValue.serverTimestamp()
-        });
       }
 
       const responsePayload: Record<string, unknown> = { success: true, inviteId: inviteRef.id };

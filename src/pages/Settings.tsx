@@ -77,6 +77,7 @@ export const Settings = () => {
   const [inviteRows, setInviteRows] = useState<Array<{ email: string; role: 'admin' | 'developer' | 'viewer' }>>([
     { email: '', role: 'viewer' },
   ]);
+  const [manualInviteLinks, setManualInviteLinks] = useState<Array<{ email: string; link: string }>>([]);
 
   useEffect(() => {
     setDisplayName(user?.displayName || '');
@@ -276,6 +277,7 @@ export const Settings = () => {
 
   const handleSendInvites = async () => {
     if (!currentOrgId || !user?.uid || !canManage) return;
+    setManualInviteLinks([]);
 
     const trimmedRows = inviteRows
       .map((row) => ({ ...row, email: row.email.trim().toLowerCase() }))
@@ -326,13 +328,12 @@ export const Settings = () => {
         })
       );
 
-      const hadFallbackLogging = results.some((r: any) => typeof r?.inviteLink === 'string');
+      const links = results.flatMap((result: any, index) => typeof result?.inviteLink === 'string'
+        ? [{ email: rowsToInvite[index].email, link: result.inviteLink as string }] : []);
+      setManualInviteLinks(links);
       setInviteRows([{ email: '', role: 'viewer' }]);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-      if (hadFallbackLogging) {
-        console.warn('Invite links returned in API response. Configure RESEND_API_KEY to send real emails.');
-      }
     } catch (error) {
       console.error('Failed to send invites', error);
       const message = error instanceof Error ? error.message : 'Failed to send invites';
@@ -788,7 +789,7 @@ export const Settings = () => {
                   </div>
 
                   <div className="flex items-center justify-end gap-3">
-                    {saved && <span className="text-emerald-500 text-sm font-medium animate-in fade-in">Invites sent!</span>}
+                    {saved && <span className="text-emerald-500 text-sm font-medium animate-in fade-in">{manualInviteLinks.length ? 'Invites created. Share the links below.' : 'Invites sent!'}</span>}
                     <button
                       type="button"
                       onClick={handleSendInvites}
@@ -799,6 +800,13 @@ export const Settings = () => {
                       Send Invites
                     </button>
                   </div>
+                  {manualInviteLinks.length > 0 && <div className="space-y-3">
+                    <p className="text-sm text-zinc-500">Email was not delivered. Share each link with its invitee.</p>
+                    {manualInviteLinks.map(({ email, link }) => <label key={email} className="block text-xs font-bold text-zinc-500">
+                      {email}
+                      <input aria-label={`Invitation link for ${email}`} readOnly value={link} onFocus={(event) => event.currentTarget.select()} className="mt-1 w-full rounded-xl border border-zinc-200 dark:border-white/10 bg-zinc-50 dark:bg-zinc-950 px-4 py-3 text-sm font-normal text-zinc-900 dark:text-white" />
+                    </label>)}
+                  </div>}
                 </section>
               )}
 

@@ -37,7 +37,8 @@ test('owner invites a viewer, viewer accepts, and invitation authorization is en
   await expect(page.getByRole('heading', { name: 'Team' })).toBeVisible();
   await page.getByPlaceholder('teammate@example.com').fill(viewerEmail);
   await page.getByRole('button', { name: 'Invite', exact: true }).click();
-  await expect(page.getByText('Invitation created and queued for email delivery.')).toBeVisible();
+  await expect(page.getByText('Invitation created. Email was not delivered; share this link with the invitee.')).toBeVisible();
+  const sharedLink = await page.getByRole('textbox', { name: 'Invitation link' }).inputValue();
 
   const ownerDoc = (await db.collection('users').where('email', '==', ownerEmail).limit(1).get()).docs[0];
   expect(ownerDoc).toBeTruthy();
@@ -45,6 +46,7 @@ test('owner invites a viewer, viewer accepts, and invitation authorization is en
   const inviteSnap = await db.collection(`organizations/${orgId}/invites`).where('email', '==', viewerEmail).limit(1).get();
   expect(inviteSnap.empty).toBe(false);
   const invite = inviteSnap.docs[0].data();
+  expect(sharedLink).toBe(invite.inviteLink);
   const invitationPath = new URL(String(invite.inviteLink));
 
   const viewerPage = await browser.newPage();
