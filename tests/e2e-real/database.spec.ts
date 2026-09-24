@@ -46,7 +46,7 @@ test('database permissions, private status data, scans, and complete project cle
     }
     await db.doc(`servers/${serverId}`).set({ id: serverId, projectId, name: 'private-hostname', hostname: '10.0.0.8',
       apiKeyHash: crypto.createHash('sha256').update(key).digest('hex'), apiKeyStatus: 'active', status: 'online',
-      publicStatusEnabled: true, publicName: 'Customer API' });
+      publicStatusEnabled: true, publicName: 'Customer API', lastSeen: new Date().toISOString() });
     await db.doc(`projects/${projectId}/incidents/incident`).set({ projectId, serverId, title: 'private-hostname CPU',
       summary: 'internal process information', severity: 'critical', status: 'investigating', publicVisible: true,
       createdAt: new Date().toISOString(), timeline: [{ userId: owner.uid }] });
@@ -101,6 +101,9 @@ test('database permissions, private status data, scans, and complete project cle
     const publicData = await publicResponse.json();
     expect(publicData.servers).toEqual([{ id: serverId, publicName: 'Public API', status: 'online' }]);
     expect(JSON.stringify(publicData)).not.toMatch(/private-hostname|apiKey|10\.0\.0\.8|internal process|timeline|userId/);
+    await db.doc(`servers/${serverId}`).update({ lastSeen: new Date(Date.now() - 60_000).toISOString() });
+    const staleStatus = await request.get(`/api/public-status?projectId=${projectId}`);
+    expect((await staleStatus.json()).servers).toEqual([{ id: serverId, publicName: 'Public API', status: 'offline' }]);
 
     expect((await request.post('/api/deep-scan', { data: { serverId } })).status()).toBe(401);
     expect((await request.post('/api/deep-scan', { headers: outsider.headers, data: { serverId } })).status()).toBe(403);

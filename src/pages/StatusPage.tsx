@@ -14,9 +14,10 @@ export const StatusPage = () => {
   const [servers, setServers] = useState<Server[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [serviceErrorMessage, setServiceErrorMessage] = useState('');
+  const [statusLoading, setStatusLoading] = useState(true);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) { setStatusLoading(false); return; }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
@@ -31,9 +32,13 @@ export const StatusPage = () => {
       } catch (error) {
         if (!controller.signal.aborted) setServiceErrorMessage('Could not refresh public status.');
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(refresh, 3000);
+        if (!controller.signal.aborted) {
+          setStatusLoading(false);
+          timer = setTimeout(refresh, 3000);
+        }
       }
     };
+    setStatusLoading(true);
     setServers([]);
     setIncidents([]);
     void refresh();
@@ -43,12 +48,15 @@ export const StatusPage = () => {
   const publicServices = servers.filter((server) => server.publicStatusEnabled);
   const activePublicIncidents = incidents.filter((incident) => incident.publicVisible && incident.status !== 'resolved');
   const overall = useMemo(() => {
+    if (statusLoading) return 'Loading Public Status';
+    if (serviceErrorMessage) return 'Status Unavailable';
+    if (publicServices.length === 0) return 'No Public Services Configured';
     if (activePublicIncidents.some((incident) => incident.severity === 'critical') || publicServices.some((server) => server.status === 'offline')) return 'Major Outage';
     if (activePublicIncidents.length || publicServices.some((server) => server.status === 'degraded')) return 'Degraded Performance';
     return 'All Systems Operational';
-  }, [activePublicIncidents, publicServices]);
+  }, [activePublicIncidents, publicServices, serviceErrorMessage, statusLoading]);
 
-  const overallTone = overall === 'Major Outage' ? 'text-red-500' : overall === 'Degraded Performance' ? 'text-amber-500' : 'text-emerald-500';
+  const overallTone = overall === 'Major Outage' ? 'text-red-500' : overall === 'Degraded Performance' ? 'text-amber-500' : overall === 'All Systems Operational' ? 'text-emerald-500' : 'text-zinc-500';
 
   return (
     <div className="min-h-full bg-white dark:bg-zinc-950 p-8 animate-in fade-in duration-500">

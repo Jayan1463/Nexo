@@ -4,6 +4,7 @@ import React, { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { 
   auth, 
   onAuthStateChanged, 
+  signOut,
   signInWithPopup, 
   signInWithRedirect,
   googleProvider,
@@ -183,6 +184,7 @@ export default function App() {
   useEffect(() => {
     inviteHandledRef.current = false;
     let unsubscribeUserDoc: (() => void) | null = null;
+    let unsubscribeMemberDoc: (() => void) | null = null;
     const e2eUser = getE2EUser();
     if (e2eUser) {
       setUser(e2eUser);
@@ -195,6 +197,8 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setAuthError('');
+      if (unsubscribeUserDoc) { unsubscribeUserDoc(); unsubscribeUserDoc = null; }
+      if (unsubscribeMemberDoc) { unsubscribeMemberDoc(); unsubscribeMemberDoc = null; }
 
       if (firebaseUser) {
         setOrg(null);
@@ -233,19 +237,24 @@ export default function App() {
 
           const memberRef = doc(db, `organizations/${orgId}/members`, firebaseUser.uid);
           const memberSnap = await getDoc(memberRef);
-          const roleForMembership = orgData.ownerId === firebaseUser.uid ? 'owner' : 'viewer';
+          const roleForMembership: AppRole = orgData.ownerId === firebaseUser.uid ? 'owner' : 'viewer';
           if (!memberSnap.exists()) {
+            if (orgData.ownerId !== firebaseUser.uid) {
+              throw new Error('Your workspace membership could not be found. Ask an administrator to invite you.');
+            }
             await setDoc(memberRef, {
               ...profile,
               role: roleForMembership,
               joinedAt: serverTimestamp(),
             }, { merge: true });
           }
+          const membershipRole = roleForMembership === 'owner' ? 'owner' : memberSnap.exists() && ['admin', 'developer', 'viewer'].includes(memberSnap.data()?.role)
+            ? memberSnap.data()!.role as AppRole : roleForMembership;
 
           const mergedOrgIds = Array.from(new Set([orgId, ...userOrgIds]));
           await setDoc(userRef, {
             ...profile,
-            role: userData?.role || roleForMembership,
+            role: membershipRole,
             currentOrgId: orgId,
             orgIds: mergedOrgIds,
             createdAt: userData?.createdAt || serverTimestamp(),
@@ -260,32 +269,41 @@ export default function App() {
           }
 
           setProject(projectId);
-          setUserRole(roleForMembership);
+          setUserRole(membershipRole);
+
+          const watchMembership = (activeOrgId: string, isOwner: boolean) => {
+            if (unsubscribeMemberDoc) unsubscribeMemberDoc();
+            unsubscribeMemberDoc = onSnapshot(doc(db, `organizations/${activeOrgId}/members`, firebaseUser.uid), (snap) => {
+              if (!snap.exists()) {
+                setUserRole('viewer');
+                void signOut(auth);
+                return;
+              }
+              const role = snap.data()?.role;
+              setUserRole(isOwner ? 'owner' : ['admin', 'developer', 'viewer'].includes(role) ? role as AppRole : 'viewer');
+            }, (error) => {
+              console.error('Failed to load membership role', error);
+              setUserRole('viewer');
+              if (error.code === 'permission-denied') void signOut(auth);
+            });
+          };
+          watchMembership(orgId, orgData.ownerId === firebaseUser.uid);
 
           const userDocRef = doc(db, 'users', firebaseUser.uid);
-          if (unsubscribeUserDoc) unsubscribeUserDoc();
           unsubscribeUserDoc = onSnapshot(userDocRef, async (snap) => {
             if (!snap.exists()) return;
             const data = snap.data() as any;
             const nextOrgId = typeof data?.currentOrgId === 'string' ? data.currentOrgId : useAppStore.getState().currentOrgId;
-            let role: AppRole = 'viewer';
-            if (nextOrgId) {
-              try {
-                const nextMemberSnap = await getDoc(doc(db, `organizations/${nextOrgId}/members`, firebaseUser.uid));
-                const memberRole = nextMemberSnap.exists() ? nextMemberSnap.data()?.role : null;
-                if (memberRole === 'owner' || memberRole === 'admin' || memberRole === 'developer' || memberRole === 'viewer') {
-                  role = memberRole;
-                }
-              } catch (error) {
-                console.error('Failed to load membership role', error);
-              }
-            }
-            setUserRole(role);
             const activeOrgId = useAppStore.getState().currentOrgId;
             if (nextOrgId && nextOrgId !== activeOrgId) {
+              setUserRole('viewer');
               setOrg(nextOrgId);
               setProject(null);
               try {
+                const nextMember = await getDoc(doc(db, `organizations/${nextOrgId}/members`, firebaseUser.uid));
+                if (!nextMember.exists()) throw new Error('Workspace membership missing');
+                const nextOrg = await getDoc(doc(db, 'organizations', nextOrgId));
+                watchMembership(nextOrgId, nextOrg.data()?.ownerId === firebaseUser.uid);
                 const nextProjects = await getDocs(query(collection(db, `organizations/${nextOrgId}/projects`), limit(1)));
                 if (!nextProjects.empty && useAppStore.getState().currentOrgId === nextOrgId) setProject(nextProjects.docs[0].id);
               } catch {
@@ -317,12 +335,17 @@ export default function App() {
         unsubscribeUserDoc();
         unsubscribeUserDoc = null;
       }
+      if (unsubscribeMemberDoc) {
+        unsubscribeMemberDoc();
+        unsubscribeMemberDoc = null;
+      }
       setLoading(false);
     });
 
     return () => {
       unsubscribe();
       if (unsubscribeUserDoc) unsubscribeUserDoc();
+      if (unsubscribeMemberDoc) unsubscribeMemberDoc();
     };
   }, [setUser, setOrg, setProject]);
   useEffect(() => {

@@ -1,5 +1,12 @@
 import { documentId, endpoint } from './database';
 
+function publicServerStatus(data: FirebaseFirestore.DocumentData, now: number) {
+  if (!['online', 'degraded'].includes(data.status)) return 'offline';
+  const lastSeen = data.lastSeen?.toDate?.() ?? new Date(data.lastSeen || 0);
+  return lastSeen instanceof Date && Number.isFinite(lastSeen.getTime()) &&
+    now - lastSeen.getTime() < 15000 ? data.status : 'offline';
+}
+
 export default endpoint('GET', async (req, db) => {
   const projectId = documentId(req.query.projectId);
   const project = await db.doc(`projects/${projectId}`).get();
@@ -10,11 +17,12 @@ export default endpoint('GET', async (req, db) => {
   ]);
   const publicServers = servers.docs.filter((doc) => !doc.data().deletedAt);
   const names = new Map(publicServers.map((doc) => [doc.id, doc.data().publicName || doc.data().name]));
+  const now = Date.now();
   return {
     servers: publicServers.map((doc) => ({
       id: doc.id,
       publicName: String(names.get(doc.id) || 'Service'),
-      status: ['online', 'degraded', 'offline'].includes(doc.data().status) ? doc.data().status : 'offline',
+      status: publicServerStatus(doc.data(), now),
     })),
     incidents: incidents.docs.filter((doc) => !doc.data().serverId || names.has(doc.data().serverId))
       .sort((a, b) => String(b.data().createdAt).localeCompare(String(a.data().createdAt))).slice(0, 30)
