@@ -2,3 +2,6 @@ To Send the Data
     node ~/nexo-agent.js
 For Testing
     npm run test:all
+
+
+
