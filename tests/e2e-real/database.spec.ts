@@ -112,11 +112,26 @@ test('database permissions, private status data, scans, and complete project cle
     connectFirestoreEmulator(anonDb, '127.0.0.1', 18080);
     await denied(getDoc(doc(anonDb, `servers/${serverId}`)));
     await denied(getDoc(doc(anonDb, `projects/${projectId}/incidents/incident`)));
+    await db.doc(`projects/${projectId}/logs/public-log`).set({
+      serverId,
+      level: 'error',
+      service: 'internal-agent',
+      message: 'Request from 10.0.0.8 by owner@example.test at /Users/owner/private token=super-secret-value https://internal.example.test',
+      timestamp: new Date().toISOString(),
+    });
+    await db.doc(`projects/${projectId}/logs/private-log`).set({
+      serverId: 'private-server',
+      level: 'error',
+      message: 'private server details',
+      timestamp: new Date(Date.now() + 1).toISOString(),
+    });
     const publicResponse = await request.get(`/api/public-status?projectId=${projectId}`);
     expect(publicResponse.status()).toBe(200);
     const publicData = await publicResponse.json();
     expect(publicData.servers).toEqual([{ id: serverId, publicName: 'Public API', status: 'online' }]);
-    expect(JSON.stringify(publicData)).not.toMatch(/private-hostname|apiKey|10\.0\.0\.8|internal process|timeline|userId/);
+    expect(publicData.logs).toEqual([expect.objectContaining({ source: 'Public API', level: 'error' })]);
+    expect(publicData.logs[0].summary).toContain('[redacted]');
+    expect(JSON.stringify(publicData)).not.toMatch(/private-hostname|apiKey|10\.0\.0\.8|owner@example\.test|\/Users\/owner|super-secret-value|internal\.example\.test|private server details|internal process|timeline|userId/);
     await db.doc(`servers/${serverId}`).update({ lastSeen: new Date(Date.now() - 60_000).toISOString() });
     const staleStatus = await request.get(`/api/public-status?projectId=${projectId}`);
     expect((await staleStatus.json()).servers).toEqual([{ id: serverId, publicName: 'Public API', status: 'offline' }]);

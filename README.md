@@ -9,7 +9,7 @@ AI-Based Server Management System – Nexo Cloud is a React, TypeScript, Node.js
 - Auth and data: Firebase Authentication and Firestore
 - Email: Resend API
 - Agent: Node.js monitoring agent in `monitoring-agent/`
-- Deployment: Vercel for the app/API, Firebase CLI for Firestore rules
+- Deployment: Azure App Service or Vercel for the app/API, Firebase CLI for Firestore rules
 
 Telemetry flow:
 
@@ -80,6 +80,15 @@ These emulator tests cover the local Express server. A deployed Vercel preview, 
 ```bash
 firebase deploy --only firestore:rules --project nexocloud-software
 ```
+
+## Azure App Service
+
+The React application and Express API can run together on an Azure App Service
+Linux plan. The server reads Azure's assigned `PORT`, listens on `0.0.0.0`, and
+serves the Vite build when `NODE_ENV=production`.
+
+See [docs/deployment.md](docs/deployment.md) for the required App Service
+settings and deployment commands.
 
 ## Monitoring Agent
 

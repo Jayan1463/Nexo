@@ -1,8 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Radio, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Radio, CheckCircle2, AlertTriangle, XCircle, Terminal } from 'lucide-react';
 import { Incident, Server } from '../types';
 import { cn, isActiveServer } from '../lib/utils';
 import { useAppStore } from '../store';
+
+interface PublicLogEntry {
+  id: string;
+  source: string;
+  level: 'info' | 'warn' | 'error';
+  summary: string;
+  timestamp: string | null;
+}
 
 export const StatusPage = () => {
   const { currentProjectId } = useAppStore();
@@ -13,21 +21,25 @@ export const StatusPage = () => {
   const projectId = publicProjectId || pathProjectId || currentProjectId;
   const [servers, setServers] = useState<Server[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [logs, setLogs] = useState<PublicLogEntry[]>([]);
   const [serviceErrorMessage, setServiceErrorMessage] = useState('');
   const [statusLoading, setStatusLoading] = useState(true);
 
   useEffect(() => {
-    if (!projectId) { setStatusLoading(false); return; }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
-        const response = await fetch(`/api/public-status?projectId=${encodeURIComponent(projectId)}`, { signal: controller.signal });
+        const endpoint = projectId
+          ? `/api/public-status?projectId=${encodeURIComponent(projectId)}`
+          : '/api/public-status';
+        const response = await fetch(endpoint, { signal: controller.signal });
         if (!response.ok) throw new Error('Could not load public status.');
         const data = await response.json();
         if (controller.signal.aborted) return;
         setServers(data.servers.map((server: Server) => ({ ...server, publicStatusEnabled: true })));
         setIncidents(data.incidents.map((incident: Incident) => ({ ...incident, publicVisible: true })));
+        setLogs(Array.isArray(data.logs) ? data.logs : []);
         setServiceErrorMessage('');
       } catch (error) {
         if (!controller.signal.aborted) setServiceErrorMessage('Could not refresh public status.');
@@ -41,6 +53,7 @@ export const StatusPage = () => {
     setStatusLoading(true);
     setServers([]);
     setIncidents([]);
+    setLogs([]);
     void refresh();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [projectId]);
@@ -91,6 +104,26 @@ export const StatusPage = () => {
             <div key={server.id} className="bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-white/10 rounded-xl p-4 flex items-center justify-between">
               <span className="font-bold text-zinc-900 dark:text-white">{server.publicName || server.name}</span>
               <ServiceStatus status={server.status} />
+            </div>
+          ))}
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-black text-zinc-900 dark:text-white">Recent Log Activity</h2>
+              <p className="text-xs text-zinc-500 mt-1">Sanitized study excerpts from public services. Sensitive identifiers and values are removed.</p>
+            </div>
+            <Terminal className="w-5 h-5 text-zinc-400" />
+          </div>
+          {logs.length === 0 ? (
+            <div className="border border-dashed border-zinc-200 dark:border-white/10 rounded-2xl p-10 text-center text-zinc-500">No recent public log activity.</div>
+          ) : logs.map((log) => (
+            <div key={log.id} className="grid gap-2 md:grid-cols-[8rem_5rem_1fr_auto] items-center bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-white/10 rounded-xl p-4 font-mono text-xs">
+              <span className="font-bold text-zinc-900 dark:text-white">{log.source}</span>
+              <span className={cn('uppercase font-black', log.level === 'error' ? 'text-red-500' : log.level === 'warn' ? 'text-amber-500' : 'text-emerald-500')}>{log.level}</span>
+              <span className="text-zinc-600 dark:text-zinc-300 break-words">{log.summary}</span>
+              <time className="text-zinc-400 whitespace-nowrap">{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : 'Time unavailable'}</time>
             </div>
           ))}
         </section>

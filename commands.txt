@@ -1,6 +1,31 @@
 To Send the Data
     node ~/nexo-agent.js
+
 For Testing
     npm run test:all
 
+Azure Dep Cmd
+    
+npm run lint &&
+npm test &&
+npm run build &&
+rm -f /private/tmp/nexo-azure-deploy.zip &&
+git ls-files -z --cached --others --exclude-standard |
+  xargs -0 zip -q /private/tmp/nexo-azure-deploy.zip &&
+zip -qr /private/tmp/nexo-azure-deploy.zip dist &&
+az webapp deploy \
+  --name nexo-cloud-jayan1463 \
+  --resource-group nexo-cloud-rg \
+  --src-path /private/tmp/nexo-azure-deploy.zip \
+  --type zip \
+  --clean true \
+  --restart true \
+  --track-status true
 
+Dep Verify 
+    curl -fsS https://nexo-cloud-jayan1463.azurewebsites.net/api/health
+
+If Prev Dep is Stil Present
+
+az webapp stop --name nexo-cloud-jayan1463 --resource-group nexo-cloud-rg &&
+az webapp start --name nexo-cloud-jayan1463 --resource-group nexo-cloud-rg
