@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
-test('owner, admin, developer, viewer, and anonymous public status use their intended access', async ({ browser, request }, testInfo) => {
+test('owner, admin, developer, auditor, and anonymous public status use their intended access', async ({ browser, request }, testInfo) => {
   test.setTimeout(120_000);
   const id = crypto.randomUUID();
   const app = initializeApp({ projectId: 'demo-nexo-e2e' }, `roles-${id}`);
@@ -45,7 +45,7 @@ test('owner, admin, developer, viewer, and anonymous public status use their int
     if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
     await expect(page.getByRole('button', { name: 'Servers', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Alerts', exact: true })).toHaveCount(role === 'viewer' ? 0 : 1);
-    await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveCount(role === 'owner' || role === 'admin' ? 1 : 0);
+    await expect(page.getByRole('button', { name: 'Team', exact: true })).toHaveCount(role === 'owner' || role === 'admin' || role === 'developer' ? 1 : 0);
     await expect(page.getByRole('button', { name: 'API Keys', exact: true })).toHaveCount(role === 'owner' || role === 'admin' ? 1 : 0);
     const commonModules: Array<[string, string]> = [
       ['Servers', 'Connected Nodes'], ['Analytics', 'System Analytics'], ['Logs', 'Log Explorer'],
@@ -54,9 +54,11 @@ test('owner, admin, developer, viewer, and anonymous public status use their int
       ['Help & Docs', 'Help & Docs'], ['Dashboard', 'System Overview'],
     ];
     const operatorModules: Array<[string, string]> = [['Alerts', 'Alert Management'], ['Incidents', 'Incidents']];
-    const managerModules: Array<[string, string]> = [['Team', 'Team'], ['API Keys', 'API Keys'], ['Audit Logs', 'Audit Logs'], ['Settings', 'Settings']];
+    const developerModules: Array<[string, string]> = [['Team', 'Team'], ['Settings', 'Settings']];
+    const managerModules: Array<[string, string]> = [['API Keys', 'API Keys'], ['Audit Logs', 'Audit Logs']];
     const modules = [...commonModules, ...(role === 'viewer' ? [] : operatorModules),
-      ...(role === 'owner' || role === 'admin' ? managerModules : [])];
+      ...(role === 'developer' ? developerModules : []),
+      ...(role === 'owner' || role === 'admin' ? [...developerModules, ...managerModules] : [])];
     for (const [nav, heading] of modules) {
       if (testInfo.project.name.includes('mobile') && await page.getByRole('button', { name: 'Open navigation menu' }).count()) {
         await page.getByRole('button', { name: 'Open navigation menu' }).click();
@@ -75,6 +77,16 @@ test('owner, admin, developer, viewer, and anonymous public status use their int
       if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
       await page.getByRole('button', { name: 'Alerts', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Alert Management' })).toBeVisible();
+      if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
+      await page.getByRole('button', { name: 'Team', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Team', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Invite', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /Remove/ })).toHaveCount(0);
+      if (testInfo.project.name.includes('mobile')) await page.getByRole('button', { name: 'Open navigation menu' }).click();
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Profile', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Organization', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Projects', exact: true })).toHaveCount(0);
     }
 
     if (role === 'admin') {

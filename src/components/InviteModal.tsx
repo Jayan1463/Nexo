@@ -3,6 +3,7 @@ import { X, Mail, Shield, Loader2, Check } from 'lucide-react';
 import { useAppStore } from '../store';
 import { cn } from '../lib/utils';
 import { auth } from '../firebase';
+import { ROLE_OPTIONS } from '../lib/roles';
 
 export const InviteModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) => {
   const { user, currentOrgId } = useAppStore();
@@ -90,19 +91,19 @@ export const InviteModal = ({ isOpen, onClose }: { isOpen: boolean, onClose: () 
               <div className="space-y-2">
                 <label className="text-xs font-bold uppercase tracking-widest text-zinc-500">Role</label>
                 <div className="grid grid-cols-3 gap-2">
-                  {(['admin', 'developer', 'viewer'] as const).map((r) => (
+                  {ROLE_OPTIONS.map((option) => (
                     <button
-                      key={r}
+                      key={option.value}
                       type="button"
-                      onClick={() => setRole(r)}
+                      onClick={() => setRole(option.value)}
                       className={cn(
                         "py-2 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all",
-                        role === r 
+                        role === option.value 
                           ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-500" 
                           : "bg-zinc-950 border-white/5 text-zinc-500 hover:text-zinc-300"
                       )}
                     >
-                      {r}
+                      {option.label}
                     </button>
                   ))}
                 </div>

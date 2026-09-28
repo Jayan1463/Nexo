@@ -44,8 +44,9 @@ assert.deepEqual(
 );
 
 const rbacSource = fs.readFileSync(new URL('../src/lib/rbac.ts', import.meta.url), 'utf8');
-assert.match(rbacSource, /team:\s*'admin'/);
+assert.match(rbacSource, /team:\s*'developer'/);
 assert.match(rbacSource, /apiKeys:\s*'admin'/);
+assert.match(rbacSource, /settings:\s*'developer'/);
 assert.doesNotMatch(rbacSource, /return true;\s*}/);
 
 const sidebarSource = fs.readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');

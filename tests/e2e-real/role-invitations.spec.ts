@@ -69,7 +69,11 @@ test('owner invites admin, admin invites developer, and developer cannot invite'
   await expect.poll(async () => (await db.doc(`organizations/${orgId}/members/${developerUser.id}`).get()).data()?.role).toBe('developer');
   if (mobile) await developer.getByRole('button', { name: 'Open navigation menu' }).click();
   await expect(developer.getByRole('button', { name: 'Alerts', exact: true })).toBeVisible();
-  await expect(developer.getByRole('button', { name: 'Team', exact: true })).toHaveCount(0);
+  await expect(developer.getByRole('button', { name: 'Team', exact: true })).toBeVisible();
+  await developer.getByRole('button', { name: 'Team', exact: true }).click();
+  await expect(developer.getByRole('heading', { name: 'Team', exact: true })).toBeVisible();
+  await expect(developer.getByRole('button', { name: 'Invite', exact: true })).toHaveCount(0);
+  await expect(developer.getByRole('button', { name: /Remove/ })).toHaveCount(0);
 
   const authResponse = await request.post('http://127.0.0.1:19099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=e2e', {
     data: { email: developerEmail, password, returnSecureToken: true },

@@ -41,6 +41,7 @@ import {
 import { useAppStore } from '../store';
 import { cn } from '../lib/utils';
 import { Organization, UserProfile, Invite, Project, OrgMember } from '../types';
+import { ROLE_OPTIONS, roleBadgeLabel, roleLabel } from '../lib/roles';
 
 export const Settings = () => {
   const { user, currentOrgId, currentProjectId, setUser, setOrg: setCurrentOrg, setProject } = useAppStore();
@@ -78,6 +79,8 @@ export const Settings = () => {
     { email: '', role: 'viewer' },
   ]);
   const [manualInviteLinks, setManualInviteLinks] = useState<Array<{ email: string; link: string }>>([]);
+  const currentUserRole = members.find(m => m.uid === user?.uid)?.role || (org?.ownerId === user?.uid ? 'owner' : 'viewer');
+  const canManage = currentUserRole === 'owner' || currentUserRole === 'admin' || org?.ownerId === user?.uid;
 
   useEffect(() => {
     setDisplayName(user?.displayName || '');
@@ -100,6 +103,10 @@ export const Settings = () => {
       // Ignore malformed local settings.
     }
   }, [user?.uid]);
+
+  useEffect(() => {
+    if (!canManage && activeSection === 'projects') setActiveSection('organization');
+  }, [activeSection, canManage]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -141,13 +148,6 @@ export const Settings = () => {
 
     });
 
-    // Fetch Invites
-    const invitesQuery = query(collection(db, `organizations/${currentOrgId}/invites`), where('status', '==', 'pending'));
-    const unsubscribeInvites = onSnapshot(invitesQuery, (snapshot) => {
-      const invitesList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invite));
-      setInvites(invitesList);
-    });
-
     // Fetch Projects
     const projectsQuery = collection(db, `organizations/${currentOrgId}/projects`);
     const unsubscribeProjects = onSnapshot(projectsQuery, (snapshot) => {
@@ -158,10 +158,25 @@ export const Settings = () => {
     return () => {
       unsubscribeOrg();
       unsubscribeMembers();
-      unsubscribeInvites();
       unsubscribeProjects();
     };
   }, [currentOrgId]);
+
+  useEffect(() => {
+    if (!currentOrgId || !canManage) {
+      setInvites([]);
+      return;
+    }
+
+    const invitesQuery = query(collection(db, `organizations/${currentOrgId}/invites`), where('status', '==', 'pending'));
+    return onSnapshot(invitesQuery, (snapshot) => {
+      const invitesList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Invite));
+      setInvites(invitesList);
+    }, (error) => {
+      console.error('Failed to load pending invites', error);
+      setInvites([]);
+    });
+  }, [currentOrgId, canManage]);
 
   const handleSaveProfile = async () => {
     if (!user) return;
@@ -214,7 +229,7 @@ export const Settings = () => {
   };
 
   const handleUpdateOrg = async (updates: Partial<Organization>) => {
-    if (!currentOrgId) return;
+    if (!currentOrgId || !canManage) return;
     setErrorMessage('');
     setLoading(true);
     try {
@@ -232,7 +247,7 @@ export const Settings = () => {
   };
 
   const handleUpdateMemberRole = async (memberUid: string, newRole: string) => {
-    if (!currentOrgId) return;
+    if (!currentOrgId || !canManage) return;
     try {
       const memberRef = doc(db, `organizations/${currentOrgId}/members`, memberUid);
       await updateDoc(memberRef, { role: newRole });
@@ -242,7 +257,7 @@ export const Settings = () => {
   };
 
   const handleRemoveMember = async (memberUid: string) => {
-    if (!currentOrgId || memberUid === user?.uid) return;
+    if (!currentOrgId || memberUid === user?.uid || !canManage) return;
     if (!window.confirm("Are you sure you want to remove this member?")) return;
 
     try {
@@ -254,7 +269,7 @@ export const Settings = () => {
   };
 
   const handleCancelInvite = async (inviteId: string) => {
-    if (!currentOrgId) return;
+    if (!currentOrgId || !canManage) return;
     try {
       const inviteRef = doc(db, `organizations/${currentOrgId}/invites`, inviteId);
       await deleteDoc(inviteRef);
@@ -347,7 +362,7 @@ export const Settings = () => {
 
   const handleAddProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentOrgId || !newProjectName) return;
+    if (!currentOrgId || !newProjectName || !canManage) return;
     setLoading(true);
     try {
       await createProject(currentOrgId, newProjectName.trim(), newProjectEnv);
@@ -362,7 +377,7 @@ export const Settings = () => {
   };
 
   const handleDeleteProject = async (projectId: string) => {
-    if (!currentOrgId) return;
+    if (!currentOrgId || !canManage) return;
     if (!window.confirm("Are you sure you want to delete this project? All associated metrics and logs will be lost.")) return;
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -520,9 +535,6 @@ export const Settings = () => {
     setSuccessMessage('2FA preference updated. Enforcement requires secure-login OTP flow to be enabled.');
   };
 
-  const currentUserRole = members.find(m => m.uid === user?.uid)?.role || (org?.ownerId === user?.uid ? 'owner' : 'viewer');
-  const canManage = currentUserRole === 'owner' || currentUserRole === 'admin' || org?.ownerId === user?.uid;
-
   return (
     <div className="p-8 max-w-6xl mx-auto space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
@@ -569,12 +581,14 @@ export const Settings = () => {
             active={activeSection === 'organization'} 
             onClick={() => setActiveSection('organization')} 
           />
-          <SettingsNav 
-            icon={Folder} 
-            label="Projects" 
-            active={activeSection === 'projects'} 
-            onClick={() => setActiveSection('projects')} 
-          />
+          {canManage && (
+            <SettingsNav
+              icon={Folder}
+              label="Projects"
+              active={activeSection === 'projects'}
+              onClick={() => setActiveSection('projects')}
+            />
+          )}
           <SettingsNav 
             icon={Shield} 
             label="Security" 
@@ -651,7 +665,8 @@ export const Settings = () => {
                         type="text"
                         defaultValue={org?.name || ''}
                         onBlur={(e) => handleUpdateOrg({ name: e.target.value })}
-                        className="flex-1 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
+                        disabled={!canManage}
+                        className="flex-1 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-emerald-500/50 transition-colors disabled:text-zinc-500 disabled:cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -715,19 +730,17 @@ export const Settings = () => {
                             onChange={(e) => handleUpdateMemberRole(member.uid, e.target.value)}
                             className="bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-400 text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded border-none focus:ring-0 cursor-pointer"
                           >
-                            <option value="admin">Admin</option>
-                            <option value="developer">Developer</option>
-                            <option value="viewer">Viewer</option>
+                            {ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                           </select>
                         ) : (
                           <span className={cn(
                             "text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded",
                             member.role === 'owner' ? "bg-emerald-500/10 text-emerald-500" : "bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-400"
                           )}>
-                            {member.role}
+                            {roleBadgeLabel(member.role)}
                           </span>
                         )}
-                        {member.uid !== user?.uid && member.role !== 'owner' && (
+                        {canManage && member.uid !== user?.uid && member.role !== 'owner' && (
                           <button 
                             onClick={() => handleRemoveMember(member.uid)}
                             className="p-2 text-zinc-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
@@ -774,9 +787,7 @@ export const Settings = () => {
                           onChange={(e) => updateInviteRow(index, { role: e.target.value as 'admin' | 'developer' | 'viewer' })}
                           className="md:col-span-3 w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/5 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-emerald-500/50 transition-colors appearance-none"
                         >
-                          <option value="admin">Admin</option>
-                          <option value="developer">Developer</option>
-                          <option value="viewer">Viewer</option>
+                          {ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                         </select>
                         <button
                           type="button"
@@ -828,7 +839,7 @@ export const Settings = () => {
                           </div>
                           <div>
                             <p className="text-sm font-medium text-zinc-900 dark:text-white">{invite.email}</p>
-                            <p className="text-xs text-zinc-500">Invited as {invite.role}</p>
+                            <p className="text-xs text-zinc-500">Invited as {roleLabel(invite.role)}</p>
                           </div>
                         </div>
                         <button 

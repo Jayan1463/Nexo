@@ -19,10 +19,10 @@ const tabMinimumRole: Record<string, AppRole> = {
   status: 'viewer',
   reports: 'viewer',
   help: 'viewer',
-  team: 'admin',
+  team: 'developer',
   apiKeys: 'admin',
   audit: 'admin',
-  settings: 'admin',
+  settings: 'developer',
 };
 
 export function hasRole(userRole: AppRole | null | undefined, minRole: AppRole) {

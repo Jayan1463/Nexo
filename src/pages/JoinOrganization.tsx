@@ -92,7 +92,7 @@ export const JoinOrganization = () => {
             onChange={(e) => setRequestedRole(e.target.value as 'viewer' | 'developer' | 'admin')}
             className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-lg px-3 py-2"
           >
-            <option value="viewer">Viewer</option>
+            <option value="viewer">Auditor</option>
             <option value="developer">Developer</option>
             <option value="admin">Admin</option>
           </select>

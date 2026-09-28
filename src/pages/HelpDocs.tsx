@@ -25,7 +25,7 @@ const docs = [
   {
     icon: Users,
     title: 'Team and Roles',
-    text: 'Owners and admins manage projects, invites, roles, and API keys. Viewers are read-only across monitoring, logs, alerts, incidents, costs, and status views.',
+    text: 'Owners and admins manage projects, invites, roles, and API keys. Developers can operate incidents and alerts, view team details, and review profile and organization information. Auditors are read-only across monitoring, logs, costs, risk, reports, and status views.',
   },
 ];
 

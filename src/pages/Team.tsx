@@ -5,11 +5,14 @@ import { useAppStore } from '../store';
 import { OrgMember, Server as ServerType, UserProfile } from '../types';
 import { cn, isActiveServer } from '../lib/utils';
 import { writeAuditLog } from '../lib/audit';
+import { hasRole } from '../lib/rbac';
+import { ROLE_OPTIONS, roleLabel } from '../lib/roles';
 
 type MemberRow = UserProfile & { role: string; serverScope?: string[]; lastActivity?: any };
 
 export const Team = () => {
-  const { currentOrgId, currentProjectId, user } = useAppStore();
+  const { currentOrgId, currentProjectId, user, userRole } = useAppStore();
+  const canManageTeam = hasRole(userRole, 'admin');
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [servers, setServers] = useState<ServerType[]>([]);
   const [email, setEmail] = useState('');
@@ -60,7 +63,7 @@ export const Team = () => {
   }, [currentProjectId]);
 
   const sendInvite = async () => {
-    if (!currentOrgId || !user?.uid || !email.trim()) return;
+    if (!currentOrgId || !user?.uid || !email.trim() || !canManageTeam) return;
     setInviteLink('');
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -91,7 +94,7 @@ export const Team = () => {
   };
 
   const changeRole = async (member: MemberRow, nextRole: string) => {
-    if (!currentOrgId || !user?.uid) return;
+    if (!currentOrgId || !user?.uid || !canManageTeam) return;
     try {
       await updateDoc(doc(db, `organizations/${currentOrgId}/members`, member.uid), { role: nextRole, lastActivity: serverTimestamp() });
       await writeAuditLog({ orgId: currentOrgId, userId: user.uid, action: 'role_changed', resource: 'member', resourceId: member.uid, metadata: { role: nextRole } });
@@ -103,7 +106,7 @@ export const Team = () => {
   };
 
   const toggleServerScope = async (member: MemberRow, serverId: string) => {
-    if (!currentOrgId || !user?.uid) return;
+    if (!currentOrgId || !user?.uid || !canManageTeam) return;
     const current = new Set(member.serverScope || []);
     if (current.has(serverId)) current.delete(serverId);
     else current.add(serverId);
@@ -119,7 +122,7 @@ export const Team = () => {
   };
 
   const removeMember = async (member: MemberRow) => {
-    if (!currentOrgId || !user?.uid || member.uid === user.uid) return;
+    if (!currentOrgId || !user?.uid || member.uid === user.uid || !canManageTeam) return;
     if (!window.confirm(`Remove ${member.email || member.uid} from this workspace?`)) return;
     try {
       await deleteDoc(doc(db, `organizations/${currentOrgId}/members`, member.uid));
@@ -139,18 +142,20 @@ export const Team = () => {
           Team Management
         </div>
         <h1 className="text-5xl font-black tracking-tighter text-zinc-900 dark:text-white mt-2">Team</h1>
-        <p className="text-zinc-500 dark:text-zinc-400 mt-2">Invite members, change roles, and assign server scope.</p>
+        <p className="text-zinc-500 dark:text-zinc-400 mt-2">
+          {canManageTeam ? 'Invite members, change roles, and assign server scope.' : 'View members and assigned roles for your organization.'}
+        </p>
       </div>
 
-      <div className="bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-white/10 rounded-2xl p-4 grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3">
-        <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="teammate@example.com" className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white" />
-        <select value={role} onChange={(event) => setRole(event.target.value as any)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white">
-          <option value="admin">Admin</option>
-          <option value="developer">Team Member</option>
-          <option value="viewer">Viewer</option>
-        </select>
-        <button onClick={sendInvite} className="bg-emerald-500 text-zinc-950 px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2"><Mail className="w-4 h-4" />Invite</button>
-      </div>
+      {canManageTeam && (
+        <div className="bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-white/10 rounded-2xl p-4 grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3">
+          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="teammate@example.com" className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white" />
+          <select value={role} onChange={(event) => setRole(event.target.value as any)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm text-zinc-900 dark:text-white">
+            {ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <button onClick={sendInvite} className="bg-emerald-500 text-zinc-950 px-5 py-3 rounded-xl font-black flex items-center justify-center gap-2"><Mail className="w-4 h-4" />Invite</button>
+        </div>
+      )}
       {message && <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 px-4 py-3 text-sm">{message}</div>}
       {inviteLink && <input aria-label="Invitation link" readOnly value={inviteLink} onFocus={(event) => event.currentTarget.select()} className="w-full rounded-xl border border-emerald-500/30 bg-white dark:bg-zinc-900 px-4 py-3 text-sm text-zinc-900 dark:text-white" />}
       {errorMessage && <div className="rounded-xl border border-red-500/30 bg-red-500/10 text-red-500 px-4 py-3 text-sm">{errorMessage}</div>}
@@ -162,20 +167,24 @@ export const Team = () => {
               <p className="font-black text-zinc-900 dark:text-white">{member.displayName || member.email || member.uid}</p>
               <p className="text-sm text-zinc-500">{member.email || member.uid}</p>
             </div>
-            <select disabled={member.role === 'owner'} value={member.role} onChange={(event) => changeRole(member, event.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white">
-              {member.role === 'owner' && <option value="owner">Owner</option>}
-              <option value="admin">Admin</option>
-              <option value="developer">Team Member</option>
-              <option value="viewer">Viewer</option>
-            </select>
+            {canManageTeam ? (
+              <select disabled={member.role === 'owner'} value={member.role} onChange={(event) => changeRole(member, event.target.value)} className="bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm text-zinc-900 dark:text-white">
+                {member.role === 'owner' && <option value="owner">Owner</option>}
+                {ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            ) : (
+              <span className="bg-zinc-100 dark:bg-zinc-950 border border-zinc-200 dark:border-white/10 rounded-xl px-3 py-2 text-sm font-bold text-zinc-600 dark:text-zinc-300">
+                {roleLabel(member.role)}
+              </span>
+            )}
             <div className="flex flex-wrap gap-2">
               {servers.length === 0 ? <span className="text-xs text-zinc-500">No servers in active project.</span> : servers.map((server) => (
-                <button key={server.id} onClick={() => toggleServerScope(member, server.id)} className={cn('px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1', member.serverScope?.includes(server.id) ? 'bg-emerald-500 text-zinc-950 border-emerald-500' : 'border-zinc-200 dark:border-white/10 text-zinc-500')}>
+                <button key={server.id} disabled={!canManageTeam} onClick={() => toggleServerScope(member, server.id)} className={cn('px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1', member.serverScope?.includes(server.id) ? 'bg-emerald-500 text-zinc-950 border-emerald-500' : 'border-zinc-200 dark:border-white/10 text-zinc-500', !canManageTeam && 'cursor-default opacity-80')}>
                   <Server className="w-3 h-3" />{server.name}
                 </button>
               ))}
             </div>
-            <button disabled={member.role === 'owner'} aria-label={`Remove ${member.email}`} onClick={() => removeMember(member)} className="text-red-500 hover:bg-red-500/10 rounded-xl p-3 justify-self-start xl:justify-self-end"><UserMinus className="w-5 h-5" /></button>
+            {canManageTeam && <button disabled={member.role === 'owner'} aria-label={`Remove ${member.email}`} onClick={() => removeMember(member)} className="text-red-500 hover:bg-red-500/10 rounded-xl p-3 justify-self-start xl:justify-self-end"><UserMinus className="w-5 h-5" /></button>}
           </div>
         ))}
       </div>

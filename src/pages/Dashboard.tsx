@@ -19,11 +19,13 @@ import { cn, isActiveServer } from '../lib/utils';
 import { motion } from 'framer-motion';
 import { InviteModal } from '../components/InviteModal';
 import { useAppStore } from '../store';
+import { hasRole } from '../lib/rbac';
 
 import { AreaChart, Area, ResponsiveContainer, YAxis, XAxis, Tooltip } from 'recharts';
 
 export const Dashboard = () => {
-  const { currentProjectId, user } = useAppStore();
+  const { currentProjectId, user, userRole } = useAppStore();
+  const canManageTeam = hasRole(userRole, 'admin');
   const [cpuData, setCpuData] = useState<any[]>([]);
   const [memData, setMemData] = useState<any[]>([]);
   const [netData, setNetData] = useState<any[]>([]);
@@ -249,16 +251,18 @@ export const Dashboard = () => {
             <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none group-hover:text-emerald-500 transition-colors" />
           </div>
 
-          <button 
-            onClick={() => setIsInviteModalOpen(true)}
-            className="bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 px-6 py-3 rounded-2xl text-sm font-black hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-zinc-900/10 dark:shadow-white/5"
-          >
-            Invite Team
-          </button>
+          {canManageTeam && (
+            <button
+              onClick={() => setIsInviteModalOpen(true)}
+              className="bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 px-6 py-3 rounded-2xl text-sm font-black hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-zinc-900/10 dark:shadow-white/5"
+            >
+              Invite Team
+            </button>
+          )}
         </div>
       </div>
 
-      <InviteModal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} />
+      {canManageTeam && <InviteModal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} />}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 items-stretch">
@@ -557,5 +561,4 @@ const CostBar = ({ label, percentage, color }: any) => (
 );
 
 import { CheckCircle2, ChevronRight } from 'lucide-react';
-
 
