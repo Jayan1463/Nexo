@@ -60,6 +60,7 @@ import { User } from 'firebase/auth';
 const makeInviteCode = () => crypto.randomUUID().replace(/-/g, '').slice(0, 20).toUpperCase();
 
 const E2E_AUTH_STORAGE_KEY = 'nexo:e2e-auth';
+const isAcceptInviteRoute = () => window.location.pathname === '/accept-invite';
 
 const getUserProfilePayload = (firebaseUser: User) => {
   if (!firebaseUser.email) {
@@ -206,6 +207,11 @@ export default function App() {
         setUser(firebaseUser);
         setWorkspaceLoading(true);
         setLoading(false);
+
+        if (isAcceptInviteRoute()) {
+          setWorkspaceLoading(false);
+          return;
+        }
 
         const bootstrapAccount = async () => {
           const profile = getUserProfilePayload(firebaseUser);
@@ -357,8 +363,8 @@ export default function App() {
 
   useEffect(() => {
     const acceptInvite = async () => {
-      if (!user || workspaceLoading || !currentOrgId || !currentProjectId || inviteHandledRef.current) return;
-      if (window.location.pathname !== '/accept-invite') return;
+      if (!user || workspaceLoading || inviteHandledRef.current) return;
+      if (!isAcceptInviteRoute()) return;
 
       if (!auth.currentUser?.emailVerified) { setInviteVerification(true); return; }
       setInviteVerification(false);
@@ -386,10 +392,12 @@ export default function App() {
         if (!response.ok) throw new Error(payload?.error || 'Invite could not be accepted.');
         setOrg(orgId);
         setProject(String(payload.projectId));
+        if (['owner', 'admin', 'developer', 'viewer'].includes(payload.role)) setUserRole(payload.role);
         alert('Invite accepted. Welcome to the organization.');
       } catch (error) {
         console.error('Failed to accept invite', error);
-        alert('Failed to accept invite. Please try again.');
+        const message = error instanceof Error ? error.message : 'Invite could not be accepted.';
+        alert(message);
       } finally {
         window.history.replaceState({}, '', '/');
       }

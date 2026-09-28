@@ -331,6 +331,7 @@ export const Settings = () => {
       const links = results.flatMap((result: any, index) => typeof result?.inviteLink === 'string'
         ? [{ email: rowsToInvite[index].email, link: result.inviteLink as string }] : []);
       setManualInviteLinks(links);
+      setErrorMessage([...new Set(results.map((result: any) => result.emailError).filter(Boolean))].join(' '));
       setInviteRows([{ email: '', role: 'viewer' }]);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);

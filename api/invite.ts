@@ -1,3 +1,4 @@
+import { sendInvitationEmail } from '../backend/invitation-email';
 import { existsSync, readFileSync } from 'node:fs';
 import admin from "firebase-admin";
 import { getFirestore } from "firebase-admin/firestore";
@@ -74,8 +75,6 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  const resendApiKey = process.env.RESEND_API_KEY;
-
   try {
     const db = getDb();
     const orgSnap = await db.collection("organizations").doc(orgId).get();
@@ -115,35 +114,10 @@ export default async function handler(req: any, res: any) {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const orgName = orgSnap.data()?.name || "your organization";
-    const fromEmail = process.env.INVITE_FROM_EMAIL || "Nexo Cloud <onboarding@resend.dev>";
-    const subject = `You're invited to join ${orgName} on Nexo Cloud`;
-    const body = `You were invited to join ${orgName} as ${normalizedRole}.\n\nAccept invite: ${inviteLink}\n\nIf you don't recognize this invite, you can ignore this email.`;
-
-    if (resendApiKey) {
-      try {
-        const resendResp = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${resendApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            from: fromEmail,
-            to: [normalizedEmail],
-            subject,
-            text: body,
-          }),
-        });
-        if (resendResp.ok) return res.status(200).json({ success: true, inviteId: inviteRef.id });
-        console.error("Resend send failed", resendResp.status, await resendResp.text());
-      } catch (error) {
-        console.error("Resend send failed", error);
-      }
-      return res.status(200).json({ success: true, inviteId: inviteRef.id, inviteLink });
-    }
-
-    return res.status(200).json({ success: true, inviteId: inviteRef.id, inviteLink });
+    const delivery = await sendInvitationEmail(normalizedEmail, orgSnap.data()?.name || 'your organization', normalizedRole, inviteLink);
+    return res.status(200).json({ success: true, inviteId: inviteRef.id, ...delivery,
+      ...(!delivery.emailSent ? { inviteLink } : {}),
+    });
   } catch (error) {
     console.error("Error sending invite:", error);
     return res.status(500).json({ error: "Internal server error" });

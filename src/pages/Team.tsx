@@ -82,7 +82,7 @@ export const Team = () => {
       } else {
         setMessage('Invitation email sent.');
       }
-      setErrorMessage('');
+      setErrorMessage(payload.emailError || '');
       setEmail('');
     } catch (error) {
       console.error('Invite failed', error);
