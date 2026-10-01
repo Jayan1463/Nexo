@@ -1,11 +1,5 @@
+import { serverStatus as publicServerStatus } from '../shared/server-status';
 import { documentId, endpoint } from './database';
-
-function publicServerStatus(data: FirebaseFirestore.DocumentData, now: number) {
-  if (!['online', 'degraded'].includes(data.status)) return 'offline';
-  const lastSeen = data.lastSeen?.toDate?.() ?? new Date(data.lastSeen || 0);
-  return lastSeen instanceof Date && Number.isFinite(lastSeen.getTime()) &&
-    now - lastSeen.getTime() < 15000 ? data.status : 'offline';
-}
 
 function publicLogSummary(value: unknown) {
   const normalized = String(value || 'System event observed')

@@ -113,7 +113,7 @@ test('owner, admin, developer, auditor, and anonymous public status use their in
   await expect(publicPage.getByText('Public API')).toBeVisible();
   await expect(publicPage.getByText('All Systems Operational')).toBeVisible();
   await expect(publicPage.getByText('private-host')).toHaveCount(0);
-  await db.doc(`servers/${serverId}`).update({ lastSeen: new Date(Date.now() - 60_000).toISOString() });
+  await db.doc(`servers/${serverId}`).update({ lastSeen: new Date(Date.now() - 180_000).toISOString() });
   await expect(publicPage.locator('section').first().getByText('Major Outage')).toBeVisible();
   const response = await request.get(`/api/public-status?projectId=${projectId}`);
   expect((await response.json()).servers).toEqual([{ id: serverId, publicName: 'Public API', status: 'offline' }]);

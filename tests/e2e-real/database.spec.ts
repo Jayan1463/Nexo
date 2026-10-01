@@ -132,7 +132,7 @@ test('database permissions, private status data, scans, and complete project cle
     expect(publicData.logs).toEqual([expect.objectContaining({ source: 'Public API', level: 'error' })]);
     expect(publicData.logs[0].summary).toContain('[redacted]');
     expect(JSON.stringify(publicData)).not.toMatch(/private-hostname|apiKey|10\.0\.0\.8|owner@example\.test|\/Users\/owner|super-secret-value|internal\.example\.test|private server details|internal process|timeline|userId/);
-    await db.doc(`servers/${serverId}`).update({ lastSeen: new Date(Date.now() - 60_000).toISOString() });
+    await db.doc(`servers/${serverId}`).update({ lastSeen: new Date(Date.now() - 180_000).toISOString() });
     const staleStatus = await request.get(`/api/public-status?projectId=${projectId}`);
     expect((await staleStatus.json()).servers).toEqual([{ id: serverId, publicName: 'Public API', status: 'offline' }]);
 

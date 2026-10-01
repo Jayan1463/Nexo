@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { serverStatus } from '../../shared/server-status';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   LineChart, 
   Line, 
@@ -58,14 +59,12 @@ const toDate = (value: any): Date | null => {
 
 const formatDate = (value: any, fallback = 'N/A') => toDate(value)?.toLocaleDateString() || fallback;
 const formatTime = (value: any, fallback = '') => toDate(value)?.toLocaleTimeString() || fallback;
-const isServerOnline = (server: Server, now: number) => {
-  const lastSeen = toDate(server.lastSeen);
-  return server.status === 'online' && Boolean(lastSeen && now - lastSeen.getTime() < 15000);
-};
+const isServerOnline = (server: Server, now: number) => serverStatus(server, now) !== 'offline';
 
 export const Servers = () => {
   const { currentOrgId, currentProjectId, setProject, user, userRole } = useAppStore();
   const canManage = userRole === 'owner' || userRole === 'admin';
+  const serverScope = useRef<string | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -106,13 +105,12 @@ export const Servers = () => {
         const data = projectDoc.data() as Partial<Project>;
         return data.id || projectDoc.id;
       });
-      setProjectIds(ids);
+      setProjectIds((previous) => previous.length === ids.length && previous.every((id, index) => id === ids[index]) ? previous : ids);
 
       if (ids.length > 0 && (!currentProjectId || !ids.includes(currentProjectId))) {
         setProject(ids[0]);
       }
     }, (error) => {
-      setProjectIds([]);
       console.error(`Failed to load projects for org ${currentOrgId}:`, error);
     });
 
@@ -120,6 +118,13 @@ export const Servers = () => {
   }, [currentOrgId, currentProjectId, setProject]);
 
   useEffect(() => {
+    const scope = currentOrgId || currentProjectId;
+    if (serverScope.current !== scope) {
+      serverScope.current = scope;
+      setServers([]);
+      setSelectedServer(null);
+      setLoading(true);
+    }
     if (!currentOrgId && !currentProjectId) {
       setServers([]);
       setLoading(false);
@@ -141,7 +146,6 @@ export const Servers = () => {
       return;
     }
 
-    setLoading(true);
     const unsubscribers: Array<() => void> = [];
     const chunkServerMaps = new Map<string, Map<string, Server>>();
     const initializedChunks = new Set<string>();
@@ -151,7 +155,9 @@ export const Servers = () => {
       const chunk = effectiveProjectIds.slice(i, i + 10);
       const chunkKey = chunk.join('|');
       const chunkQuery = query(collection(db, 'servers'), where('projectId', 'in', chunk));
-      const unsubscribe = onSnapshot(chunkQuery, (snapshot) => {
+      const unsubscribe = onSnapshot(chunkQuery, { includeMetadataChanges: true }, (snapshot) => {
+        // Wait for authoritative data rather than publishing an empty local cache.
+        if (snapshot.metadata.fromCache && snapshot.empty) return;
         const currentChunkMap = new Map<string, Server>();
         snapshot.docs.forEach((serverDoc) => {
           const server = { id: serverDoc.id, ...serverDoc.data() } as Server;
@@ -166,8 +172,8 @@ export const Servers = () => {
         chunkServerMaps.forEach((serverMap) => {
           serverMap.forEach((server, id) => merged.set(id, server));
         });
-        setServers(Array.from(merged.values()));
         if (initializedChunks.size >= totalChunks) {
+          setServers(Array.from(merged.values()));
           setLoading(false);
         }
       }, (error) => {
